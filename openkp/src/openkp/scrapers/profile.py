@@ -150,6 +150,19 @@ class Profile(BaseModel):
 # --- fetcher ---
 
 
+async def fetch_demographics(client: KaiserRequest) -> Profile:
+    """Hit /mycare/v1.0/user and return demographics only.
+
+    No PCP, no emergency contacts — just the raw profile payload from the
+    pharmacy consumer endpoint. Useful for write tools that need name, email,
+    mobile, address, GUID, and MRN but don't need (and shouldn't pay for) the
+    extra round trips that `fetch_profile` does.
+    """
+    response = await client.get(USER_PATH, headers=_user_headers())
+    response.raise_for_status()
+    return _parse_profile(response.json())
+
+
 async def fetch_profile(client: KaiserRequest) -> Profile:
     """Hit /mycare/v1.0/user, then CareTeam + emergency contacts, merge into one `Profile`.
 
@@ -158,9 +171,7 @@ async def fetch_profile(client: KaiserRequest) -> Profile:
     list log a warning and leave the corresponding fields empty rather than
     breaking the demographics payload, which is the critical leg.
     """
-    response = await client.get(USER_PATH, headers=_user_headers())
-    response.raise_for_status()
-    profile = _parse_profile(response.json())
+    profile = await fetch_demographics(client)
 
     try:
         profile.pcp = await _fetch_pcp(client)

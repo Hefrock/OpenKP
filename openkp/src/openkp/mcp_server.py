@@ -41,6 +41,7 @@ from openkp.scrapers.medications import fetch_medications
 from openkp.scrapers.messages import fetch_message, fetch_messages
 from openkp.scrapers.problems import fetch_problems
 from openkp.scrapers.profile import fetch_profile
+from openkp.scrapers.refill import request_refill as _request_refill
 from openkp.scrapers.request import KaiserRequest
 from openkp.scrapers.session import SessionStore
 
@@ -356,14 +357,66 @@ async def list_allergies() -> dict:
     return response.model_dump()
 
 
+@mcp.tool()
+async def request_refill(medication_id: str, confirm: bool = False) -> dict:
+    """Request a mail-order refill for one prescription. Two-call confirm pattern.
+
+    **v1 supports mail-order only.** Local pickup is deferred to v2 — see
+    `docs/research/endpoints/refill.md` for scope and rationale.
+
+    Args:
+      medication_id: The `rx_number` from a `list_medications` result. Must be
+        an Rx Kaiser flags as currently fillable; non-fillable Rxs return a
+        preview with `can_confirm=False` and a warnings list explaining why.
+      confirm: When False (default), perform read-only checks and return a
+        `RefillPreview` dict so the user (or Claude on the user's behalf) can
+        review medication name, estimated copay, delivery destination, and
+        payment-on-file status BEFORE committing. When True, run the full
+        cart -> eligibility -> placeorderMail commit pipeline and return an
+        `OrderConfirmation` dict.
+
+    Confirm-before-act pattern:
+      Call once with `confirm=False` to preview. Read the preview. If the
+      `can_confirm` field is True and you want to proceed, call again with
+      `confirm=True`. The preview will refuse to commit (raise) if any blocker
+      is present (`can_confirm=False`).
+
+    Safety:
+      - Every commit-path call writes to `~/.openkp/audit.log` (JSONL) before
+        and after the Kaiser request.
+      - `OPENKP_DRY_RUN=1` in the environment short-circuits the final POST and
+        returns a synthetic success `OrderConfirmation` with `dry_run=True`.
+        Use this to smoke-test before spending a real refill.
+      - Card details (last-4, expiry, wallet token) are NEVER returned through
+        the MCP surface and are redacted from the audit log. KP's saved
+        payment method is used per KP's own "if a copay is required, this
+        payment method will be charged" policy.
+
+    Returns a dict shaped like either `RefillPreview` (when `confirm=False`)
+    or `OrderConfirmation` (when `confirm=True`).
+
+    Source: Kaiser's pharmacy BFF microservices on `apims.kaiserpermanente.org`.
+    See `docs/research/endpoints/refill.md` for the endpoint map.
+    """
+    store = _get_session_store()
+    cfg = load_config()
+    client = KaiserRequest(store)
+    result = await _request_refill(
+        client,
+        medication_id,
+        confirm=confirm,
+        data_dir=cfg.data_dir,
+    )
+    return result.model_dump()
+
+
 # --- TODO: remaining Phase 2 read tools ----------------------------------------
 # - list_immunizations()
 # - list_visits(limit: int = 10)
 #
-# Phase 3 writes:
+# Phase 3 writes (request_refill ✅ shipped 2026-04-25 — mail-only, see refill.md):
 # - send_message(to, subject, body)
 # - reply_to_message(message_id, body)
-# - request_refill(medication_id)
 # - book_appointment(provider_id, slot_id)
 # ---------------------------------------------------------------------------------
 
