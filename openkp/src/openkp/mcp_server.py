@@ -31,6 +31,7 @@ from mcp.server.fastmcp import FastMCP
 
 from openkp import __version__
 from openkp.config import load_config
+from openkp.scrapers.allergies import fetch_allergies
 from openkp.scrapers.labs import (
     download_lab_result_pdf as _download_lab_result_pdf,
     fetch_lab_result,
@@ -38,6 +39,7 @@ from openkp.scrapers.labs import (
 )
 from openkp.scrapers.medications import fetch_medications
 from openkp.scrapers.messages import fetch_message, fetch_messages
+from openkp.scrapers.problems import fetch_problems
 from openkp.scrapers.profile import fetch_profile
 from openkp.scrapers.request import KaiserRequest
 from openkp.scrapers.session import SessionStore
@@ -300,9 +302,62 @@ async def list_medications(filter: str = "all") -> dict:
     return response.model_dump()
 
 
+@mcp.tool()
+async def list_problems() -> dict:
+    """List active health issues from the patient's problem list.
+
+    The "problem list" is what KP shows on the Health Summary page and the
+    dedicated Health Issues page — active diagnoses and ongoing health
+    conditions, name + date noted. Useful as the anchor for "what's going
+    on with my X" questions and for pairing with the medication list.
+
+    Returns a dict shaped like the `ProblemsResponse` pydantic model in
+    `openkp.scrapers.problems`, with a `problems` array plus `total_count`.
+
+    Each problem carries: `id`, `name`, `date_noted` (display string,
+    typically `"M/D/YYYY"`), `action_code` (raw int — `0` is the only value
+    observed and indicates active), `is_read_only`, and `comments` (clinician
+    free text, often null).
+
+    No ICD codes, severity, or resolved-date in this surface — KP does not
+    expose those to the patient view. See `docs/research/endpoints/problems.md`.
+    """
+    store = _get_session_store()
+    client = KaiserRequest(store)
+    response = await fetch_problems(client)
+    return response.model_dump()
+
+
+@mcp.tool()
+async def list_allergies() -> dict:
+    """List recorded drug, food, and environmental allergies.
+
+    The most common state is "no known allergies" — empty `allergies` list
+    plus `status: "no_known_allergies"`. That is a real, valid medical state,
+    not an error.
+
+    Returns a dict shaped like the `AllergiesResponse` pydantic model in
+    `openkp.scrapers.allergies`, with `allergies`, `total_count`, `status`
+    (one of `"no_known_allergies"`, `"recorded"`, or null when the status
+    code is unrecognized), and `status_code` (the raw `AllergiesStatus` int
+    from Kaiser).
+
+    Each allergy carries: `id`, `name`, `date_noted`, `action_code`,
+    `is_read_only`, `comments`, `reactions` (list of strings), `severity`.
+
+    Per-item field names are inferred from the structurally-identical
+    problems endpoint and Epic conventions — no populated allergy has been
+    observed live yet. See `docs/research/endpoints/allergies.md`.
+    """
+    store = _get_session_store()
+    client = KaiserRequest(store)
+    response = await fetch_allergies(client)
+    return response.model_dump()
+
+
 # --- TODO: remaining Phase 2 read tools ----------------------------------------
-# - list_allergies()
-# - list_problems()
+# - finish emergency_contacts on get_profile
+# - list_immunizations()
 # - list_visits(limit: int = 10)
 #
 # Phase 3 writes:

@@ -28,10 +28,11 @@ See `DESIGN.md` §1 (audience), §5 (Phase 4 / 4.5), §10 (distribution strategy
   - `list_messages` + `read_message` ✅ shipped + live-verified. Message center list, single-thread read, search. See `docs/recon/session-5.md`.
   - `list_lab_results` + `read_lab_result` + `download_lab_result_pdf` ✅ shipped + live-verified. Test results (labs, imaging, cardiac device reports) plus PDF download to `~/.openkp/downloads/`. The PDF tool surfaces four statuses: `downloaded`, `generation_in_progress` (Kaiser builds large PDFs on demand, retry in ~30s), `no_pdf_available` (no doc exists), `error`. See `docs/research/endpoints/labs.md` and `docs/recon/session-7.md`.
   - `list_medications` ✅ shipped + live-verified. Active and recent prescriptions with dose, prescriber, sig, refills, copay, mailable / auto-refill flags. **First scraper to hit the new pharmacy BFF microservices on `apims.kaiserpermanente.org`** — proves session cookies cross subdomains within `.kaiserpermanente.org`. See `docs/research/endpoints/medications.md` and `docs/recon/session-8.md`.
-  - Next: `list_problems`, then `list_allergies`, then finish `emergency_contacts` on `get_profile`.
+  - `list_problems` + `list_allergies` ✅ shipped + live-verified. Active diagnoses (name + date_noted, intentionally minimal — KP doesn't expose ICD/severity to patients) and allergy list (handles "no known allergies" as a first-class state via derived `status` field). Both back on the legacy `/mychartcn/Clinical/<topic>/LoadListData` family — meds was the BFF outlier, not the new normal. See `docs/research/endpoints/problems.md`, `allergies.md`, and `docs/recon/session-9.md`.
+  - Next: finish `emergency_contacts` on `get_profile` (last Phase 2 read item).
 - **Phase 3 write tools:** queued.
 
-**Tests:** 221 passing. Run with `.venv/bin/pytest -q` from `openkp/`.
+**Tests:** 261 passing. Run with `.venv/bin/pytest -q` from `openkp/`.
 
 ## Read these first
 
