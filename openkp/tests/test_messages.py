@@ -5,6 +5,7 @@ Fixtures use fabricated subjects, bodies, and sender names. No PHI.
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -13,12 +14,14 @@ import pytest
 from openkp.scrapers.csrf import CSRF_PATH
 from openkp.scrapers.messages import (
     DETAILS_PATH,
+    DOCDETAILS_LEGACY_PATH,
     FOLDER_TAGS,
     LIST_PATH,
     MAX_PAGE_SIZE,
     PAGE_PATH,
     Attachment,
     Message,
+    MessageAttachmentDownload,
     MessageThread,
     MessageThreadDetail,
     _fetch_page_nonce,
@@ -29,6 +32,8 @@ from openkp.scrapers.messages import (
     _parse_message,
     _parse_thread_summary,
     _resolve_display_name,
+    _safe_filename,
+    download_message_attachment,
     fetch_message,
     fetch_messages,
 )
@@ -245,14 +250,43 @@ def test_resolve_handles_non_dict_pools():
 
 def test_parse_attachments_basic():
     raw = [
-        {"name": "lab-report", "fileExtension": "pdf", "dcsId": "x", "etxId": "y"},
+        {
+            "type": 2,
+            "name": "lab-report",
+            "fileExtension": "pdf",
+            "dcsId": "dcs-x",
+            "etxId": "etx-y",
+            "organizationId": "org-1",
+        },
         {"name": "photo", "fileExtension": "jpg"},
     ]
     attachments = _parse_attachments(raw)
     assert attachments == [
-        Attachment(name="lab-report", file_extension="pdf"),
+        Attachment(
+            name="lab-report",
+            file_extension="pdf",
+            dcs_id="dcs-x",
+            attachment_type=2,
+            organization_id="org-1",
+        ),
         Attachment(name="photo", file_extension="jpg"),
     ]
+
+
+def test_parse_attachments_keeps_item_with_only_dcs_id():
+    """A real attachment may have a dcs_id even when name/ext are absent;
+    keep it so the caller can still download by handle."""
+    raw = [{"dcsId": "dcs-z"}]
+    attachments = _parse_attachments(raw)
+    assert len(attachments) == 1
+    assert attachments[0].dcs_id == "dcs-z"
+    assert attachments[0].name is None
+
+
+def test_parse_attachments_ignores_non_int_type():
+    raw = [{"name": "x.pdf", "fileExtension": "pdf", "type": "weird"}]
+    attachments = _parse_attachments(raw)
+    assert attachments[0].attachment_type is None
 
 
 def test_parse_attachments_empty_and_invalid():
@@ -610,6 +644,234 @@ async def test_fetch_messages_clamps_limit():
     assert len(threads) == MAX_PAGE_SIZE
 
 
+# --- fetch_messages deep_search (pagination walk) ---
+
+
+def _deep_page(threads: list[dict], *, has_more: bool, oldest_searched: str = "") -> dict:
+    """Build a GetConversationList payload shaped like the real responses
+    we see in kp-messages-deepsearch-1.har, with the localSummary contract."""
+    return {
+        "conversations": threads,
+        "users": {},
+        "viewers": {},
+        "localSummary": {
+            "hasMoreConversations": has_more,
+            "oldestSearchedInstantISO": oldest_searched,
+            "newestLoadedInstantISO": "",
+            "oldestLoadedInstantISO": threads[-1].get("messages", [{}])[0].get("deliveryInstantISO", "") if threads else "",
+            "numberLoaded": len(threads),
+            "pagingInfo": 0,
+        },
+    }
+
+
+def _deep_thread(hth_id: str, sent_at: str = "2024-01-01T00:00:00Z") -> dict:
+    return {
+        "hthId": hth_id,
+        "subject": f"Subject {hth_id}",
+        "userKeys": [],
+        "messages": [{"wmgId": f"m-{hth_id}", "deliveryInstantISO": sent_at, "body": "x"}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_messages_deep_search_walks_pagination():
+    """The genetics-thread scenario: search returns nothing on the first page,
+    then hits a match on a later page reachable only via the
+    oldestSearchedInstantISO cursor in localSummary."""
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    page1 = _deep_page([], has_more=True, oldest_searched="2024-05-09T18:34:09Z")
+    page2 = _deep_page(
+        [_deep_thread("genetics-2023-06-24", "2023-06-24T01:56:39Z")],
+        has_more=True,
+        oldest_searched="2023-04-12T16:53:57Z",
+    )
+    page3 = _deep_page([], has_more=False)
+    mock_client, p = _patch_http([
+        httpx.Response(200, text=_page_html()),
+        httpx.Response(200, text=_csrf_html()),
+        httpx.Response(200, json=page1),
+        httpx.Response(200, json=page2),
+        httpx.Response(200, json=page3),
+    ])
+    try:
+        threads = await fetch_messages(
+            KaiserRequest(store),
+            folder="inbox",
+            search="genetic",
+            deep_search=True,
+        )
+    finally:
+        p.stop()
+
+    assert len(threads) == 1
+    assert threads[0].id == "genetics-2023-06-24"
+
+    # 2 setup calls (nonce, csrf) + 3 list POSTs.
+    assert mock_client.request.await_count == 5
+
+    # Each list POST should reuse the same nonce + CSRF.
+    list_calls = mock_client.request.await_args_list[2:]
+    assert all(call.kwargs["json"]["PageNonce"] == _FAKE_NONCE for call in list_calls)
+    assert all(
+        call.kwargs["headers"]["__RequestVerificationToken"] == _FAKE_CSRF
+        for call in list_calls
+    )
+    # Cursor advances using oldestSearchedInstantISO from the previous page.
+    assert list_calls[0].kwargs["json"]["localLoadParams"]["loadStartInstantISO"] == ""
+    assert list_calls[1].kwargs["json"]["localLoadParams"]["loadStartInstantISO"] == "2024-05-09T18:34:09Z"
+    assert list_calls[2].kwargs["json"]["localLoadParams"]["loadStartInstantISO"] == "2023-04-12T16:53:57Z"
+    # Search query stays constant.
+    assert all(call.kwargs["json"]["searchQuery"] == "genetic" for call in list_calls)
+
+
+@pytest.mark.asyncio
+async def test_fetch_messages_deep_search_stops_when_no_more():
+    """hasMoreConversations=false should terminate the walk even before
+    max_pages is exhausted."""
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    page = _deep_page([_deep_thread("only")], has_more=False)
+    mock_client, p = _patch_http([
+        httpx.Response(200, text=_page_html()),
+        httpx.Response(200, text=_csrf_html()),
+        httpx.Response(200, json=page),
+    ])
+    try:
+        threads = await fetch_messages(
+            KaiserRequest(store), folder="inbox", deep_search=True, max_pages=99,
+        )
+    finally:
+        p.stop()
+
+    assert len(threads) == 1
+    # Only 1 list POST despite max_pages=99 — because hasMoreConversations was False.
+    assert mock_client.request.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_fetch_messages_deep_search_respects_max_pages():
+    """When Kaiser keeps saying hasMoreConversations=true, the walk must
+    bail at max_pages so we don't loop forever."""
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    # Each page advances the cursor and claims more results exist.
+    pages = [
+        _deep_page(
+            [_deep_thread(f"thread-{i}")],
+            has_more=True,
+            oldest_searched=f"2024-{12 - i:02d}-01T00:00:00Z",
+        )
+        for i in range(5)
+    ]
+    responses = [httpx.Response(200, text=_page_html()), httpx.Response(200, text=_csrf_html())]
+    responses += [httpx.Response(200, json=p) for p in pages]
+    mock_client, patched = _patch_http(responses)
+    try:
+        threads = await fetch_messages(
+            KaiserRequest(store), folder="inbox", deep_search=True, max_pages=3,
+        )
+    finally:
+        patched.stop()
+
+    # 3 pages walked, 3 threads collected. Pages 4 and 5 not requested.
+    assert len(threads) == 3
+    assert mock_client.request.await_count == 2 + 3
+
+
+@pytest.mark.asyncio
+async def test_fetch_messages_deep_search_dedupes_by_id():
+    """If Kaiser returns the same thread on two consecutive pages (boundary
+    artifact), we should only count it once."""
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    dup_thread = _deep_thread("dup-1")
+    page1 = _deep_page([dup_thread], has_more=True, oldest_searched="2024-01-01T00:00:00Z")
+    page2 = _deep_page([dup_thread, _deep_thread("unique-2")], has_more=False)
+    _, p = _patch_http([
+        httpx.Response(200, text=_page_html()),
+        httpx.Response(200, text=_csrf_html()),
+        httpx.Response(200, json=page1),
+        httpx.Response(200, json=page2),
+    ])
+    try:
+        threads = await fetch_messages(
+            KaiserRequest(store), folder="inbox", deep_search=True,
+        )
+    finally:
+        p.stop()
+
+    ids = [t.id for t in threads]
+    assert ids == ["dup-1", "unique-2"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_messages_deep_search_breaks_on_stuck_cursor():
+    """Defense against a malformed response that would cause an infinite
+    loop: if oldestSearchedInstantISO doesn't advance, stop walking."""
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    stuck = _deep_page(
+        [_deep_thread("page1")],
+        has_more=True,
+        oldest_searched="2024-05-09T18:34:09Z",
+    )
+    same_cursor = _deep_page(
+        [_deep_thread("page2")],
+        has_more=True,
+        oldest_searched="2024-05-09T18:34:09Z",  # same as previous
+    )
+    mock_client, p = _patch_http([
+        httpx.Response(200, text=_page_html()),
+        httpx.Response(200, text=_csrf_html()),
+        httpx.Response(200, json=stuck),
+        httpx.Response(200, json=same_cursor),
+    ])
+    try:
+        threads = await fetch_messages(
+            KaiserRequest(store), folder="inbox", deep_search=True, max_pages=10,
+        )
+    finally:
+        p.stop()
+
+    # Two pages walked: page1 normal, page2 with stuck cursor (caught and stopped).
+    # Should NOT walk page 3 because cursor didn't advance.
+    assert len(threads) == 2
+    assert mock_client.request.await_count == 2 + 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_messages_single_page_default_unchanged():
+    """Sanity check: deep_search=False (the default) preserves single-page
+    behavior — no localSummary inspection, no cursor walking."""
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    mock_client, p = _patch_http([
+        httpx.Response(200, text=_page_html()),
+        httpx.Response(200, text=_csrf_html()),
+        httpx.Response(200, json=_sample_list_payload()),
+    ])
+    try:
+        threads = await fetch_messages(KaiserRequest(store), folder="inbox")
+    finally:
+        p.stop()
+
+    assert len(threads) == 2
+    # Exactly one list POST in single-page mode.
+    list_posts = [
+        c for c in mock_client.request.await_args_list
+        if c.args[0] == "POST" and LIST_PATH in c.args[1]
+    ]
+    assert len(list_posts) == 1
+
+
 # --- fetch_message (single thread read) ---
 
 
@@ -691,3 +953,198 @@ async def test_fetch_message_propagates_http_errors():
             await fetch_message(KaiserRequest(store), "thread-x")
     finally:
         p.stop()
+
+
+# --- _safe_filename ---
+
+
+def test_safe_filename_replaces_unsafe_chars():
+    assert _safe_filename('a/b\\c:d*e?"f<g>h|i') == "a_b_c_d_e__f_g_h_i"
+
+
+def test_safe_filename_caps_length():
+    assert len(_safe_filename("x" * 500)) <= 180
+
+
+def test_safe_filename_falls_back_when_blank():
+    assert _safe_filename("   ") == "attachment"
+
+
+# --- download_message_attachment ---
+
+
+@pytest.mark.asyncio
+async def test_download_message_attachment_happy_path(tmp_path: Path):
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    pdf_bytes = b"%PDF-1.7\nFAKE PDF BYTES\n%%EOF"
+    download_url_relative = (
+        "/Documents/ViewDocument/Download?dcsid=dcs-1&displayName=Report&dcsExt=PDF"
+    )
+    mock_client, p = _patch_http([
+        httpx.Response(200, text=_csrf_html()),
+        httpx.Response(200, json={"downloadUrl": download_url_relative, "displayName": "Report"}),
+        httpx.Response(200, content=pdf_bytes, headers={"content-type": "application/pdf"}),
+    ])
+    try:
+        outcome = await download_message_attachment(
+            KaiserRequest(store),
+            "dcs-1",
+            file_extension="PDF",
+            download_dir=tmp_path,
+        )
+    finally:
+        p.stop()
+
+    assert isinstance(outcome, MessageAttachmentDownload)
+    assert outcome.status == "downloaded"
+    assert outcome.filename == "Report.pdf"
+    assert outcome.size_bytes == len(pdf_bytes)
+    saved = Path(outcome.path)
+    assert saved.exists()
+    assert saved.read_bytes() == pdf_bytes
+
+    # 3 calls: CSRF GET, GetDocumentDetailsLegacy POST, binary GET
+    assert mock_client.request.await_count == 3
+    det_call = mock_client.request.await_args_list[1]
+    assert det_call.args[0] == "POST"
+    assert DOCDETAILS_LEGACY_PATH in det_call.args[1]
+    body = det_call.kwargs["json"]
+    assert body["dcsId"] == "dcs-1"
+    assert body["fileExtension"] == "PDF"
+    assert body["organizationId"] == ""
+    assert body["useOldMobileLink"] is False
+
+    # The binary GET should hit /mychartcn-prefixed path (Kaiser's downloadUrl
+    # arrives without that prefix and we have to add it back).
+    bin_call = mock_client.request.await_args_list[2]
+    assert bin_call.args[0] == "GET"
+    assert "/mychartcn/Documents/ViewDocument/Download" in bin_call.args[1]
+
+
+@pytest.mark.asyncio
+async def test_download_message_attachment_empty_dcs_id_skips_http(tmp_path: Path):
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    mock_client, p = _patch_http([httpx.Response(200, text=_csrf_html())])
+    try:
+        outcome = await download_message_attachment(
+            KaiserRequest(store), "", download_dir=tmp_path,
+        )
+    finally:
+        p.stop()
+
+    assert outcome.status == "error"
+    assert "empty" in (outcome.reason or "").lower()
+    assert mock_client.request.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_download_message_attachment_no_download_url(tmp_path: Path):
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    _, p = _patch_http([
+        httpx.Response(200, text=_csrf_html()),
+        httpx.Response(200, json={"displayName": "X"}),  # no downloadUrl
+    ])
+    try:
+        outcome = await download_message_attachment(
+            KaiserRequest(store), "dcs-1", download_dir=tmp_path,
+        )
+    finally:
+        p.stop()
+
+    assert outcome.status == "error"
+    assert "downloadUrl" in (outcome.reason or "")
+
+
+@pytest.mark.asyncio
+async def test_download_message_attachment_uses_display_name_override(tmp_path: Path):
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    pdf_bytes = b"%PDF-1.7\n"
+    _, p = _patch_http([
+        httpx.Response(200, text=_csrf_html()),
+        httpx.Response(200, json={"downloadUrl": "/Documents/ViewDocument/Download?x=1", "displayName": "kaiser-name"}),
+        httpx.Response(200, content=pdf_bytes, headers={"content-type": "application/pdf"}),
+    ])
+    try:
+        outcome = await download_message_attachment(
+            KaiserRequest(store),
+            "dcs-1",
+            file_extension="PDF",
+            display_name="my-override",
+            download_dir=tmp_path,
+        )
+    finally:
+        p.stop()
+
+    assert outcome.filename == "my-override.pdf"
+
+
+@pytest.mark.asyncio
+async def test_download_message_attachment_propagates_http_errors(tmp_path: Path):
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    _, p = _patch_http([
+        httpx.Response(200, text=_csrf_html()),
+        httpx.Response(500, text="kaboom"),
+    ])
+    try:
+        with pytest.raises(httpx.HTTPStatusError):
+            await download_message_attachment(
+                KaiserRequest(store), "dcs-1", download_dir=tmp_path,
+            )
+    finally:
+        p.stop()
+
+
+@pytest.mark.asyncio
+async def test_download_message_attachment_empty_body_returns_error(tmp_path: Path):
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    _, p = _patch_http([
+        httpx.Response(200, text=_csrf_html()),
+        httpx.Response(200, json={"downloadUrl": "/Documents/ViewDocument/Download?x=1", "displayName": "X"}),
+        httpx.Response(200, content=b""),
+    ])
+    try:
+        outcome = await download_message_attachment(
+            KaiserRequest(store), "dcs-1", download_dir=tmp_path,
+        )
+    finally:
+        p.stop()
+
+    assert outcome.status == "error"
+    assert "empty" in (outcome.reason or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_download_message_attachment_passes_organization_id(tmp_path: Path):
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    pdf_bytes = b"%PDF\n"
+    mock_client, p = _patch_http([
+        httpx.Response(200, text=_csrf_html()),
+        httpx.Response(200, json={"downloadUrl": "/Documents/ViewDocument/Download?x=1", "displayName": "X"}),
+        httpx.Response(200, content=pdf_bytes),
+    ])
+    try:
+        await download_message_attachment(
+            KaiserRequest(store),
+            "dcs-1",
+            organization_id="org-cross-region",
+            download_dir=tmp_path,
+        )
+    finally:
+        p.stop()
+
+    body = mock_client.request.await_args_list[1].kwargs["json"]
+    assert body["organizationId"] == "org-cross-region"

@@ -10,9 +10,9 @@ Source HAR: `docs/research/captures/kp-messages-2.har`, 2026-04-23.
 | List threads (+ search + pagination) | `POST /mychartcn/api/conversations/GetConversationList` | ✅ Mapped, implemented |
 | Read one thread (all messages) | `POST /mychartcn/api/conversations/GetConversationDetails` | ✅ Mapped, implemented |
 | Compose / reply | unknown | 🔴 Phase 3 write, not captured |
-| Download attachment | unknown | 🔴 Phase 3, not captured |
+| Download attachment | `GetDocumentDetailsLegacy` → `GET /Documents/ViewDocument/Download` | ✅ Mapped, implemented |
 
-MCP tools registered: `list_messages`, `read_message`.
+MCP tools registered: `list_messages`, `read_message`, `download_message_attachment`.
 
 ## Auth / anti-forgery — two separate tokens required
 
@@ -167,6 +167,68 @@ __RequestVerificationToken: <token from /mychartcn/Home/CSRFToken>
   have a `name` field (display name). `userOverrideNames` holds direct
   string mappings and wins over `users`/`viewers`.
 
+### `localSummary` is the pagination contract
+
+Every `GetConversationList` response carries a `localSummary` object that
+tells the caller how to walk pagination:
+
+```json
+{
+  "localSummary": {
+    "hasMoreConversations": true,
+    "newestLoadedInstantISO": "2026-03-09T23:04:35Z",
+    "oldestLoadedInstantISO": "2024-05-09T18:34:09Z",
+    "oldestSearchedInstantISO": "2024-05-09T18:34:09Z",
+    "numberLoaded": 50,
+    "pagingInfo": 0
+  }
+}
+```
+
+- `hasMoreConversations`: keep paginating?
+- `oldestSearchedInstantISO`: cursor for the **next** page. Pass this back as
+  `loadStartInstantISO` to step into older history. **It advances even when
+  the current page returns zero results** — that's the trick that lets
+  search reach archival threads (see deep-search section below).
+- `oldestLoadedInstantISO`: oldest result actually returned in this page,
+  empty when `numberLoaded == 0`.
+- `numberLoaded`: thread count in this page (after server-side `searchQuery`
+  filtering, if any).
+
+### `searchQuery` is page-scoped, not index-scoped
+
+The biggest gotcha in this endpoint: `searchQuery` filters within the page
+that `loadStartInstantISO` selects, not across the whole inbox. With an
+empty cursor, you load the most recent ~50 threads and the search runs
+only against those. Older matches are invisible.
+
+The KP UI handles this with a "Search more conversations" link that walks
+pagination via `oldestSearchedInstantISO` until Kaiser sets
+`hasMoreConversations: false`. There is **no separate global-search
+endpoint** — it's the same `GetConversationList` endpoint, called
+repeatedly with progressively older cursors.
+
+We mirror this with `fetch_messages(deep_search=True, max_pages=N)`. Source
+HAR: `docs/research/captures/kp-messages-deepsearch-1.har`, 2026-04-25,
+captured by searching "genetic" against an account where the matching
+threads are ~3 years old.
+
+Walk algorithm (matches what the UI does):
+
+```
+cursor = before_iso or ""
+for _ in range(max_pages):
+    threads, summary = fetch_one_page(cursor, searchQuery)
+    accumulate threads (dedupe by hthId)
+    if not summary.hasMoreConversations: break
+    next_cursor = summary.oldestSearchedInstantISO
+    if not next_cursor or next_cursor == cursor: break  # avoid infinite loop
+    cursor = next_cursor
+```
+
+Reuse the same `PageNonce` and CSRF token across every page in one walk —
+the UI does, and refetching them per page would triple the round-trip cost.
+
 ## `POST /mychartcn/api/conversations/GetConversationDetails`
 
 **URL:** `https://healthy.kaiserpermanente.org/mychartcn/api/conversations/GetConversationDetails`
@@ -251,14 +313,83 @@ Observed structure:
 }
 ```
 
-OpenKP surfaces only `name` and `file_extension` for now. Downloading is a
-future concern — probably needs a POST with `dcsId`/`etxId` we haven't
-captured yet.
+OpenKP surfaces `name`, `file_extension`, `dcs_id`, `attachment_type`, and
+`organization_id`. `dcs_id` is the handle for `download_message_attachment`.
+
+## Attachment download chain
+
+Source HAR: `docs/research/captures/kp-email-attachment-download.har`,
+2026-04-25. Captured by clicking the attachment chip on a 2023 genetics
+counseling thread.
+
+Two real requests beyond the existing `read_message` flow (the rest of the
+HAR is Quantum Metric analytics noise):
+
+### Step 1: `POST /mychartcn/api/documents/viewer/GetDocumentDetailsLegacy`
+
+**Request body:**
+
+```json
+{
+  "dcsId": "<from message attachment>",
+  "fileExtension": "PDF",
+  "organizationId": "",
+  "useOldMobileLink": false
+}
+```
+
+Headers: same `__RequestVerificationToken` + `Content-Type: application/json`
++ `Origin` + `Referer` shape as `GetConversationDetails`. **No `PageNonce`
+required** — only the conversation endpoints need it.
+
+**Response shape:**
+
+```json
+{
+  "dcsId": "...",
+  "token": "...",                          // Internal handle, ignore
+  "orgId": "",
+  "displayName": "...",                    // Use as filename
+  "userFriendlyDisplayName": "",
+  "legacyEncryption": true,                // Just signals which crypto Kaiser uses
+  "isMobile": false,
+  "fileDescription": "...",
+  "allowPreview": false,
+  "downloadUrl": "/Documents/ViewDocument/Download?dcsid=...&displayName=...&dcsExt=PDF",
+  "previewUrl": "",
+  "mimeType": "application/pdf"
+}
+```
+
+`downloadUrl` arrives without the `/mychartcn` prefix. Prepend it before the
+GET (same gotcha as labs PDF download).
+
+### Step 2: `GET /mychartcn/Documents/ViewDocument/Download?dcsid=...&displayName=...&dcsExt=PDF`
+
+Returns the binary file. Server sends `Content-Disposition: attachment;
+filename="..."` and the correct `Content-Type` (e.g. `application/pdf`).
+We send `Accept: application/pdf,*/*` even though the browser used a
+generic `text/html` accept — Kaiser doesn't care.
+
+### Why `Legacy`?
+
+The endpoint name `GetDocumentDetailsLegacy` is distinct from the
+`GetDocumentDetails` lab-result PDFs use. The response includes
+`legacyEncryption: true`, which suggests these documents predate Kaiser's
+newer document-store migration. Behaviorally identical for our purposes —
+the chain is simpler than the lab PDF flow because there's no on-demand
+generation step (message attachments are static files Kaiser stored once).
+
+### What's missing vs lab PDFs
+
+- **No `GetDocumentGenerationInfo` step.** Message attachments are static.
+- **No `generation_in_progress` outcome.** Either the file is there or
+  there's an error.
+- **No `no_pdf_available` outcome.** The caller already has a `dcs_id` from
+  `read_message`, which means the attachment exists.
 
 ## Known unknowns
 
-- **Download endpoint for attachments.** Not in the captured HAR. Would need
-  a capture of clicking an attachment.
 - **Compose / reply endpoint.** Phase 3 write. Not captured.
 - **Mark-as-read.** When the user opens a thread in the UI, Kaiser probably
   fires a side call to flip `isUnread`. Not captured in our HAR (or it may

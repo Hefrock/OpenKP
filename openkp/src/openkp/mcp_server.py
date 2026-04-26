@@ -38,7 +38,11 @@ from openkp.scrapers.labs import (
     fetch_lab_results,
 )
 from openkp.scrapers.medications import fetch_medications
-from openkp.scrapers.messages import fetch_message, fetch_messages
+from openkp.scrapers.messages import (
+    download_message_attachment as _download_message_attachment,
+    fetch_message,
+    fetch_messages,
+)
 from openkp.scrapers.problems import fetch_problems
 from openkp.scrapers.profile import fetch_profile
 from openkp.scrapers.refill import request_refill as _request_refill
@@ -141,6 +145,8 @@ async def list_messages(
     search: str | None = None,
     before_iso: str | None = None,
     limit: int = 50,
+    deep_search: bool = False,
+    max_pages: int = 30,
 ) -> list[dict]:
     """List message threads from the Kaiser message center.
 
@@ -151,7 +157,15 @@ async def list_messages(
         and sender.
       before_iso: Pagination cursor. Pass the ISO timestamp of the oldest
         thread from a previous page to fetch older results.
-      limit: Max threads to return. Clamped to 50 (Kaiser's per-page max).
+      limit: Max threads to return in single-page mode. Clamped to 50
+        (Kaiser's per-page max). Ignored when `deep_search=True`.
+      deep_search: If True, walk pagination across the full inbox history.
+        Use this when searching for older threads — Kaiser's `searchQuery`
+        only matches within one loaded page (≈50 threads), so a default
+        search misses anything older. Costs one round trip per page until
+        Kaiser reports no more results or `max_pages` is hit.
+      max_pages: Hard cap on pages walked in deep-search mode. Default 30
+        (≈1500 threads worth of history, sufficient for most accounts).
 
     Returns a list of thread summaries, each shaped like the `MessageThread`
     pydantic model in `openkp.scrapers.messages`. The `id` field is the
@@ -167,6 +181,8 @@ async def list_messages(
         search=search,
         before_iso=before_iso,
         limit=limit,
+        deep_search=deep_search,
+        max_pages=max_pages,
     )
     return [t.model_dump() for t in threads]
 
@@ -180,8 +196,10 @@ async def read_message(thread_id: str) -> dict | None:
 
     Returns a dict shaped like the `MessageThreadDetail` pydantic model. The
     `messages` array is ordered most-recent-first per Kaiser's convention.
-    Message bodies are HTML-stripped to plain text. Returns `None` if the
-    thread cannot be found.
+    Message bodies are HTML-stripped to plain text. Each message's
+    `attachments[]` carries `dcs_id`, `name`, and `file_extension` — pass
+    `dcs_id` to `download_message_attachment` to fetch the binary. Returns
+    `None` if the thread cannot be found.
 
     See `docs/research/endpoints/messages.md`.
     """
@@ -189,6 +207,44 @@ async def read_message(thread_id: str) -> dict | None:
     client = KaiserRequest(store)
     thread = await fetch_message(client, thread_id)
     return thread.model_dump() if thread else None
+
+
+@mcp.tool()
+async def download_message_attachment(
+    dcs_id: str,
+    file_extension: str = "PDF",
+    display_name: str | None = None,
+    organization_id: str = "",
+) -> dict:
+    """Download a message attachment to disk and return its local path.
+
+    Args:
+      dcs_id: The `dcs_id` field from a `read_message` attachment.
+      file_extension: Kaiser's extension marker (e.g. "PDF", "JPG"). Pass
+        through from the attachment metadata.
+      display_name: Optional override for the saved filename. If omitted,
+        Kaiser's display name is used.
+      organization_id: Cross-region attachment marker. Empty string is the
+        common same-region case.
+
+    Saved under `~/.openkp/downloads/` (same directory as lab PDFs). Returns
+    a dict shaped like `MessageAttachmentDownload`, with `status` being:
+      - "downloaded" — saved, `path` holds the local filesystem path.
+      - "error"      — `reason` holds a short explanation.
+
+    The bytes are NOT returned through MCP — too big for Claude's context.
+    Hand the path to a separate PDF / image reading tool, or open locally.
+    """
+    store = _get_session_store()
+    client = KaiserRequest(store)
+    outcome = await _download_message_attachment(
+        client,
+        dcs_id=dcs_id,
+        file_extension=file_extension,
+        display_name=display_name,
+        organization_id=organization_id,
+    )
+    return outcome.model_dump()
 
 
 @mcp.tool()

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -40,6 +41,18 @@ PAGE_PATH = "/mychartcn/app/communication-center"
 LIST_PATH = "/mychartcn/api/conversations/GetConversationList"
 DETAILS_PATH = "/mychartcn/api/conversations/GetConversationDetails"
 PAGE_REFERER = "https://healthy.kaiserpermanente.org/mychartcn/app/communication-center"
+
+# Attachment-download chain. `Legacy` variant is what the message-center UI
+# uses — distinct from the `GetDocumentDetails` that lab-result PDFs hit.
+# Message attachments are static files (no on-demand generation step).
+DOCDETAILS_LEGACY_PATH = "/mychartcn/api/documents/viewer/GetDocumentDetailsLegacy"
+
+# Where attachment binaries land. Same directory as lab PDFs — fewer surprises
+# for callers that handle both, and the displayName disambiguates.
+DEFAULT_DOWNLOAD_DIR = Path.home() / ".openkp" / "downloads"
+
+# Characters unsafe for a filesystem path across the common cases.
+_UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 # Folder name → Kaiser integer tag. Observed empirically in
 # `docs/research/captures/kp-messages-2.har` GetFoldersList response, matched
@@ -64,11 +77,17 @@ _NONCE_RE = re.compile(r"""nonce=['"]([a-f0-9]{16,})['"]""", re.IGNORECASE)
 
 
 class Attachment(BaseModel):
-    """A file attached to a message. We don't download them (that's a
-    separate Phase 3 concern), just surface enough metadata for display."""
+    """A file attached to a message.
+
+    `dcs_id` is Kaiser's opaque document handle. Pass it to
+    `download_message_attachment` to fetch the binary.
+    """
 
     name: str | None = None
     file_extension: str | None = None
+    dcs_id: str | None = None
+    attachment_type: int | None = None
+    organization_id: str | None = None
 
 
 class Author(BaseModel):
@@ -112,6 +131,25 @@ class MessageThreadDetail(MessageThread):
     messages: list[Message] = Field(default_factory=list)
 
 
+class MessageAttachmentDownload(BaseModel):
+    """Outcome of a `download_message_attachment` call.
+
+    Status values:
+      - "downloaded" — file is on disk, see `path`.
+      - "error"      — transport, IO, or missing-downloadUrl failure;
+                       `reason` explains.
+
+    Unlike lab PDFs, message attachments are static files that Kaiser stores
+    once and serves directly — there is no `generation_in_progress` state.
+    """
+
+    status: str
+    path: str | None = None
+    filename: str | None = None
+    size_bytes: int | None = None
+    reason: str | None = None
+
+
 # --- fetchers ---
 
 
@@ -121,19 +159,32 @@ async def fetch_messages(
     search: str | None = None,
     before_iso: str | None = None,
     limit: int = MAX_PAGE_SIZE,
+    deep_search: bool = False,
+    max_pages: int = 30,
 ) -> list[MessageThread]:
     """List message threads in one folder.
 
-    One round trip to GetConversationList, plus one upfront to fetch the
-    page nonce. Kaiser returns up to 50 threads per page. `limit` caps at 50.
-    For older pages, pass `before_iso` as the timestamp of the oldest thread
-    from the previous result.
+    Single-page mode (default): one round trip to GetConversationList. Kaiser
+    returns up to 50 threads. For older pages, pass `before_iso` as the cursor.
+
+    Deep-search mode (`deep_search=True`): walk pagination using the
+    `oldestSearchedInstantISO` cursor Kaiser returns in `localSummary`. Stops
+    when Kaiser reports no more conversations, when the cursor stops
+    advancing, or when `max_pages` is hit. Use this when searching for older
+    threads — Kaiser's `searchQuery` only matches within the loaded page, so
+    a single-page search misses anything older than the most recent ~50
+    threads. Results are deduped by thread id.
 
     Args:
       folder: One of `FOLDER_TAGS` keys. Defaults to "inbox".
       search: Optional search string. Kaiser searches subject, body, sender.
-      before_iso: Cursor for pagination. Empty = newest page.
-      limit: Max threads to return. Clamped to 50.
+      before_iso: Cursor for pagination. Empty = newest page. In deep-search
+        mode, this is the starting cursor (default = newest).
+      limit: Max threads to return. Clamped to 50. Ignored in deep-search
+        mode (use `max_pages` to bound that walk instead).
+      deep_search: If True, walk pagination across the full message history.
+      max_pages: Hard cap on pages walked in deep-search mode. Default 30
+        (≈ 1500 threads worth of history). Ignored in single-page mode.
 
     Returns an empty list if the folder is unknown or the response is malformed.
     """
@@ -142,8 +193,56 @@ async def fetch_messages(
         logger.warning("Unknown folder %r; valid: %s", folder, sorted(FOLDER_TAGS))
         return []
 
+    # Same nonce + CSRF reused across every page in a deep walk — Kaiser's UI
+    # does the same. Each call would otherwise spend two extra round trips.
     nonce = await _fetch_page_nonce(client)
     csrf = await fetch_csrf_token(client, referer=PAGE_REFERER)
+
+    if not deep_search:
+        threads, _ = await _fetch_message_page(
+            client, tag=tag, search=search, before_iso=before_iso, csrf=csrf, nonce=nonce,
+        )
+        clamped = max(1, min(limit, MAX_PAGE_SIZE))
+        return threads[:clamped]
+
+    seen_ids: set[str] = set()
+    merged: list[MessageThread] = []
+    cursor = before_iso or ""
+    pages = max(1, max_pages)
+    for _ in range(pages):
+        threads, summary = await _fetch_message_page(
+            client, tag=tag, search=search, before_iso=cursor, csrf=csrf, nonce=nonce,
+        )
+        for t in threads:
+            if t.id and t.id not in seen_ids:
+                seen_ids.add(t.id)
+                merged.append(t)
+        if not summary.get("hasMoreConversations"):
+            break
+        next_cursor = _str_or_none(summary.get("oldestSearchedInstantISO")) or ""
+        # Guard against a malformed response that would loop forever.
+        if not next_cursor or next_cursor == cursor:
+            break
+        cursor = next_cursor
+    return merged
+
+
+async def _fetch_message_page(
+    client: KaiserRequest,
+    *,
+    tag: int,
+    search: str | None,
+    before_iso: str | None,
+    csrf: str,
+    nonce: str,
+) -> tuple[list[MessageThread], dict[str, Any]]:
+    """One GetConversationList POST. Returns (threads, localSummary).
+
+    `localSummary` carries the deep-search contract:
+      - `hasMoreConversations` (bool) — should we keep paginating?
+      - `oldestSearchedInstantISO` — cursor for the next page (advances even
+        when the current page returns zero matches).
+    """
     payload = {
         "tag": tag,
         "localLoadParams": {
@@ -157,10 +256,11 @@ async def fetch_messages(
     }
     response = await client.post(LIST_PATH, headers=_api_headers(csrf), json=payload)
     response.raise_for_status()
-
-    threads = _parse_conversation_list(response.json(), folder_tag=tag)
-    clamped = max(1, min(limit, MAX_PAGE_SIZE))
-    return threads[:clamped]
+    body = response.json() if response.content else {}
+    threads = _parse_conversation_list(body, folder_tag=tag)
+    summary_raw = body.get("localSummary") if isinstance(body, dict) else None
+    summary = summary_raw if isinstance(summary_raw, dict) else {}
+    return threads, summary
 
 
 async def fetch_message(client: KaiserRequest, thread_id: str) -> MessageThreadDetail | None:
@@ -183,6 +283,88 @@ async def fetch_message(client: KaiserRequest, thread_id: str) -> MessageThreadD
     response = await client.post(DETAILS_PATH, headers=_api_headers(csrf), json=payload)
     response.raise_for_status()
     return _parse_conversation_details(response.json())
+
+
+async def download_message_attachment(
+    client: KaiserRequest,
+    dcs_id: str,
+    file_extension: str = "PDF",
+    display_name: str | None = None,
+    organization_id: str = "",
+    download_dir: Path | None = None,
+) -> MessageAttachmentDownload:
+    """Save a message attachment binary to disk.
+
+    Two-hop chain:
+      1. POST GetDocumentDetailsLegacy(dcsId) → downloadUrl
+      2. GET <downloadUrl> → binary bytes, saved to disk
+
+    Args:
+      dcs_id: The `dcs_id` field from a `read_message` attachment.
+      file_extension: Kaiser's extension marker (e.g. "PDF", "JPG"). Pass
+        through from the attachment metadata.
+      display_name: Optional override for the saved filename. If omitted, we
+        use Kaiser's `displayName` from GetDocumentDetailsLegacy.
+      organization_id: Cross-region attachment marker. Default empty matches
+        the same-region case.
+      download_dir: Override the default `~/.openkp/downloads/` directory.
+
+    Returns a `MessageAttachmentDownload` with `status='downloaded'` on
+    success, or `status='error'` with a short `reason` if anything fails
+    short of a raised HTTP error.
+    """
+    if not dcs_id:
+        return MessageAttachmentDownload(status="error", reason="dcs_id is empty")
+
+    csrf = await fetch_csrf_token(client, referer=PAGE_REFERER)
+
+    det_response = await client.post(
+        DOCDETAILS_LEGACY_PATH,
+        headers=_api_headers(csrf),
+        json={
+            "dcsId": dcs_id,
+            "fileExtension": file_extension,
+            "organizationId": organization_id,
+            "useOldMobileLink": False,
+        },
+    )
+    det_response.raise_for_status()
+    det = det_response.json() if det_response.content else {}
+    download_url = _str_or_none(det.get("downloadUrl"))
+    if not download_url:
+        return MessageAttachmentDownload(
+            status="error",
+            reason="no downloadUrl in GetDocumentDetailsLegacy response",
+        )
+    name_for_file = display_name or _str_or_none(det.get("displayName")) or dcs_id
+
+    # Kaiser returns downloadUrl as a relative path that omits the /mychartcn
+    # prefix. Match the labs scraper's behavior: prepend it if missing.
+    path = download_url if download_url.startswith("/mychartcn") else f"/mychartcn{download_url}"
+    bin_response = await client.get(
+        path,
+        headers={"Accept": "application/pdf,*/*", "Referer": PAGE_REFERER},
+    )
+    bin_response.raise_for_status()
+    body = bin_response.content
+    if not body:
+        return MessageAttachmentDownload(status="error", reason="empty response body")
+
+    out_dir = download_dir or DEFAULT_DOWNLOAD_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe = _safe_filename(name_for_file)
+    suffix = f".{file_extension.lower().lstrip('.')}" if file_extension else ""
+    if suffix and not safe.lower().endswith(suffix):
+        safe += suffix
+    out_path = out_dir / safe
+    out_path.write_bytes(body)
+
+    return MessageAttachmentDownload(
+        status="downloaded",
+        path=str(out_path),
+        filename=safe,
+        size_bytes=len(body),
+    )
 
 
 # --- private helpers ---
@@ -389,9 +571,19 @@ def _parse_attachments(raw: Any) -> list[Attachment]:
             continue
         name = _str_or_none(item.get("name"))
         ext = _str_or_none(item.get("fileExtension"))
-        if not name and not ext:
+        dcs_id = _str_or_none(item.get("dcsId"))
+        if not name and not ext and not dcs_id:
             continue
-        out.append(Attachment(name=name, file_extension=ext))
+        att_type = item.get("type")
+        out.append(
+            Attachment(
+                name=name,
+                file_extension=ext,
+                dcs_id=dcs_id,
+                attachment_type=att_type if isinstance(att_type, int) else None,
+                organization_id=_str_or_none(item.get("organizationId")),
+            )
+        )
     return out
 
 
@@ -465,6 +657,19 @@ def _html_to_text(html: Any) -> str | None:
             out.append("")
             prev_blank = True
     return "\n".join(out).strip() or None
+
+
+def _safe_filename(name: str) -> str:
+    """Produce a filesystem-safe name for a downloaded attachment.
+
+    Replaces path separators, control chars, and Windows-reserved chars with
+    underscores. Trims whitespace. Caps length at 180 to stay well under
+    common filesystem limits when combined with the download directory path.
+    """
+    cleaned = _UNSAFE_FILENAME_RE.sub("_", name).strip()
+    if len(cleaned) > 180:
+        cleaned = cleaned[:180].rstrip()
+    return cleaned or "attachment"
 
 
 def _str_or_none(value: Any) -> str | None:
