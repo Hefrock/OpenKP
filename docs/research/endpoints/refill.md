@@ -355,3 +355,11 @@ These are not part of v1 but worth recording so we don't re-investigate:
 - **`placeOrderPickupApiUri` is in the same `apiRestUris` block** — confirms the local-pickup commit endpoint exists. Future v2 reference for when we add `deliveryMethod="L"`.
 - **`csrfToken` lives in `ui_config.apiRestUris.csrfToken`** in the cart response. We don't currently send one to the BFF and orders still place — but worth knowing this exists if any endpoint ever requires it.
 - **Adjacent endpoints surfaced in this capture (Phase 3 backlog):** `GET /orderStatus` (track refill — already noted in medications.md), `GET /rxnotificationpreferences` (read auto-refill state), `GET /paytoprovider`, `GET /medGuide`, `GET /drugImage`, `GET /rxTransferDetails`.
+
+## `GET /orderDetails` — captured 2026-04-25
+
+The "View order details" page on kp.org is backed by `GET .../rx-order-management-bff/v1/orderDetails?ordernum=<orderNumber>&pharmacyId=`. Response includes everything we'd need for a future `track_refill_order(order_number)` tool: status (API code + UI string), placed/committed timestamps, full Rx list with statuses, shipping address, payment info (last-4 + card-type code), pill image URL, and a `trackingId` field that populates when the order ships.
+
+This response also confirmed our `cardType` → `cardImageCode` mapping is correct: response carries both `"cardType": "American Express"` and `"cardImageCode": "AM"` in the same payload, validating the lookup.
+
+Field of interest for a future tracking tool: `orderStatus` cycles through values like `INPROGRESS` (just placed) → presumably `SHIPPED` (with `trackingId` populated) → `DELIVERED`. We've only captured `INPROGRESS` so far.
