@@ -6,6 +6,10 @@ Inspired by [Open Record](https://github.com/Fan-Pier-Labs/openrecord) by Ryan H
 
 **Status:** auth complete. The MCP server runs and exposes `ping`, `whoami`, and `session_check` tools. `session_check` logs into Kaiser via a persistent Chromium profile, captures cookies, and confirms an authenticated endpoint responds. Real read tools (`list_medications`, `list_lab_results`, etc.) are the next phase.
 
+## Regional support
+
+**OpenKP is only tested against Kaiser's Northern California (NorCal) region.** Kaiser operates 8 regions: NorCal, SoCal, Hawaii, Northwest, Colorado, Georgia, Mid-Atlantic, and Washington. They share a common portal front door at `healthy.kaiserpermanente.org`, but region codes, pharmacy endpoints, and data shapes differ. If you're a KP member outside NorCal, expect breakage. The architecture leaves room for per-region adapters (see `DESIGN.md` §12), but none exist yet. Issues and HAR captures from other regions are welcome.
+
 ## Why this exists
 
 Kaiser's FHIR patient API is read-only and limited to USCDI. That's by design. Your record contains more than what the API surfaces, and you have every right to act on it (refill meds, message your team, view labs) through any interface you choose, including an AI agent. OpenKP is that interface.

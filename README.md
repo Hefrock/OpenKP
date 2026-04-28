@@ -4,6 +4,8 @@ A patient-directed MCP server that bridges Claude and Kaiser Permanente's patien
 
 This is the workspace root. The actual code lives in `openkp/`.
 
+**Region support:** NorCal only at this stage. See `openkp/README.md` for details.
+
 ## Layout
 
 ```
