@@ -33,6 +33,10 @@ from openkp import __version__
 from openkp.config import load_config
 from openkp.scrapers.allergies import fetch_allergies
 from openkp.scrapers.appointments import fetch_appointments, fetch_past_visits
+from openkp.scrapers.visit_notes import (
+    download_visit_avs_pdf as _download_visit_avs_pdf,
+    fetch_visit_notes,
+)
 from openkp.scrapers.labs import (
     download_lab_result_pdf as _download_lab_result_pdf,
     fetch_lab_result,
@@ -690,6 +694,68 @@ async def list_past_visits(
         until_iso=until_iso,
     )
     return response.model_dump()
+
+
+@mcp.tool()
+async def read_visit_notes(csn: str) -> dict:
+    """Return clinical notes + rendered After Visit Summary for one past visit.
+
+    Source: Kaiser's `/mychartcn/api/visit-notes/*` and `/api/report-content/
+    LoadReportContent` endpoints. Surfaces what kp.org shows when you click
+    into a past visit and open "Notes" or "After Visit Summary" — provider
+    progress notes, operative notes, and the AVS instruction sheet.
+
+    Args:
+      csn: The `csn` field from a `list_past_visits` row. The same value is
+        returned at the top level of a `PastVisit` object as `csn`.
+
+    Returns a dict shaped like the `VisitNotesResponse` pydantic model in
+    `openkp.scrapers.visit_notes`. Each `VisitNote` carries:
+
+      - `note_type` — "Progress Notes", "Operative Note", "After Visit
+        Summary", etc.
+      - `iso` — note timestamp (ISO-8601 with Kaiser's offset).
+      - `is_addendum`, `is_sensitive`, `provider_name`.
+      - `content_text` — HTML-stripped plain text. Read this for content.
+      - `content_html` — raw Epic-rendered HTML, for callers that want it.
+
+    The `after_visit_summary` field, when populated, is the rendered AVS
+    content (synthetic note-shaped object). `avs_pdf_dcs_id` is the handle
+    you'd pass to `download_visit_avs_pdf` for the canonical PDF, and
+    `avs_pdf_available` mirrors whether the PDF download path is viable.
+
+    Some visit types (refills, walk-ins) have no clinical notes AND no AVS;
+    expect both `notes=[]` and `after_visit_summary=None` in that case.
+
+    See `docs/research/endpoints/visit_notes.md`.
+    """
+    store = _get_session_store()
+    client = KaiserRequest(store)
+    response = await fetch_visit_notes(client, csn)
+    return response.model_dump()
+
+
+@mcp.tool()
+async def download_visit_avs_pdf(csn: str) -> dict:
+    """Download the canonical After Visit Summary PDF for one past visit.
+
+    Saves to `~/.openkp/downloads/`. Same pattern as `download_lab_result_pdf`
+    and `download_message_attachment` — bytes are NOT returned through MCP.
+
+    Args:
+      csn: The `csn` field from a `list_past_visits` row.
+
+    Returns a dict shaped like `AvsPdfDownload` with `status` being one of:
+      - "downloaded"        — saved, `path` holds the local filesystem path.
+      - "no_pdf_available"  — visit has no AVS (refills, etc).
+      - "error"             — `reason` holds a short explanation.
+
+    See `docs/research/endpoints/visit_notes.md`.
+    """
+    store = _get_session_store()
+    client = KaiserRequest(store)
+    outcome = await _download_visit_avs_pdf(client, csn)
+    return outcome.model_dump()
 
 
 # --- TODO: remaining Phase 2 read tools ----------------------------------------
