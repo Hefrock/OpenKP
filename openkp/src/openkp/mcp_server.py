@@ -42,6 +42,9 @@ from openkp.scrapers.messages import (
     download_message_attachment as _download_message_attachment,
     fetch_message,
     fetch_messages,
+    list_message_recipients as _list_message_recipients,
+    list_message_topics as _list_message_topics,
+    send_message as _send_message,
 )
 from openkp.scrapers.problems import fetch_problems
 from openkp.scrapers.profile import fetch_profile
@@ -503,13 +506,119 @@ async def track_refill_order(order_number: str) -> dict:
     return result.model_dump()
 
 
+@mcp.tool()
+async def list_message_recipients() -> list[dict]:
+    """List the providers and pools you can send a non-urgent message to.
+
+    Mirrors the recipient picker in MyChart's "Message your care team" UI.
+    Order is whatever Kaiser sends — typically PCP first, then specialists
+    with prior visits in alphabetical order. Use the `recipient_id` from a
+    returned row when calling `send_message`.
+
+    Returns a list of dicts with `recipient_id`, `display_name`, `role`, and
+    `raw` (the verbatim Kaiser row, kept so the send path can echo unknown
+    fields back).
+
+    Source: `POST /mychartcn/api/medicaladvicerequests/GetMedicalAdviceRequestRecipients`.
+    See `docs/research/endpoints/messages.md` "Send new message" section.
+    """
+    store = _get_session_store()
+    client = KaiserRequest(store)
+    recipients = await _list_message_recipients(client)
+    return [r.model_dump() for r in recipients]
+
+
+@mcp.tool()
+async def list_message_topics() -> list[dict]:
+    """List the valid topic values for `send_message`.
+
+    Returned by Kaiser as the "Reason for Message" dropdown. Verified catalog
+    (live, 2026-05-03):
+
+    - `value="97"`,  `title="Test Results"`
+    - `value="98"`,  `title="Medication"`
+    - `value="99"`,  `title="Visit Follow-Up"`
+    - `value="100"`, `title="Upcoming Appointment or Procedure"`
+    - `value="101"`, `title="Non-Urgent Medical Advice"`
+
+    Source: `POST /mychartcn/api/medicaladvicerequests/GetSubtopics`.
+    """
+    store = _get_session_store()
+    client = KaiserRequest(store)
+    topics = await _list_message_topics(client)
+    return [t.model_dump() for t in topics]
+
+
+@mcp.tool()
+async def send_message(
+    recipient_id: str,
+    topic_value: str,
+    subject: str,
+    body: str,
+    confirm: bool = False,
+) -> dict:
+    """Send a non-urgent message to a Kaiser provider. Two-call confirm pattern.
+
+    **v1 limits:** No attachments. No reply-to-existing-thread (always starts a
+    new conversation). Mirrors MyChart's "Message your care team" form.
+
+    Args:
+      recipient_id: The `recipient_id` from a `list_message_recipients` row.
+      topic_value: One of the `value` strings from `list_message_topics`,
+        e.g. `"100"` for "Upcoming Appointment or Procedure" or `"101"` for
+        "Non-Urgent Medical Advice".
+      subject: Message subject. Required, non-empty.
+      body: Message body. Required, non-empty. Newlines preserved.
+      confirm: When False (default), build and return a `MessagePreview`
+        without sending. When True, run the full GetComposeId → SaveDraft →
+        Send chain and return a `MessageConfirmation`.
+
+    Confirm-before-act pattern:
+      Call once with `confirm=False` to preview. Read the preview. If
+      `can_confirm` is True and you want to proceed, call again with
+      `confirm=True`. The preview will refuse to commit (raise) if any
+      blocker is present.
+
+    Safety:
+      - Every commit-path call writes to `~/.openkp/audit.log` (JSONL) before
+        and after the Kaiser request. **Subject and body are NOT logged** —
+        only metadata (recipient display name, topic, body length).
+      - `OPENKP_DRY_RUN=1` short-circuits the actual Send POST and returns a
+        synthetic confirmation with `dry_run=True`. The prep calls
+        (GetComposeId, SaveDraft) still run; SaveDraft's draft persists in
+        Kaiser's system until the next live send cleans it up.
+
+    Returns a dict shaped like `MessagePreview` (when `confirm=False`) or
+    `MessageConfirmation` (when `confirm=True`).
+
+    Source: `POST /mychartcn/api/medicaladvicerequests/{SaveMedicalAdviceRequestDraft, SendMedicalAdviceRequest}`.
+    See `docs/research/endpoints/messages.md`.
+    """
+    store = _get_session_store()
+    cfg = load_config()
+    client = KaiserRequest(store)
+    result = await _send_message(
+        client,
+        recipient_id=recipient_id,
+        topic_value=topic_value,
+        subject=subject,
+        body=body,
+        confirm=confirm,
+        data_dir=cfg.data_dir,
+    )
+    return result.model_dump()
+
+
 # --- TODO: remaining Phase 2 read tools ----------------------------------------
 # - list_immunizations()
 # - list_visits(limit: int = 10)
 #
-# Phase 3 writes (request_refill ✅ shipped 2026-04-25 — mail-only, see refill.md):
-# Phase 3 reads (track_refill_order ✅ shipped 2026-04-27, see refill.md):
-# - send_message(to, subject, body)
+# Phase 3 writes:
+#   request_refill           ✅ shipped 2026-04-25 — mail-only, see refill.md
+#   send_message             ✅ shipped 2026-05-03, see messages.md
+# Phase 3 reads:
+#   track_refill_order       ✅ shipped 2026-04-27, see refill.md
+# Phase 3 not yet started:
 # - reply_to_message(message_id, body)
 # - book_appointment(provider_id, slot_id)
 # ---------------------------------------------------------------------------------

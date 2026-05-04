@@ -11,31 +11,51 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from openkp.safety import DRY_RUN_ENV
 from openkp.scrapers.csrf import CSRF_PATH
 from openkp.scrapers.messages import (
+    COMPOSE_ID_PATH,
+    COMPOSE_REMOVE_PATH,
     DETAILS_PATH,
     DOCDETAILS_LEGACY_PATH,
+    DRAFT_SAVE_PATH,
     FOLDER_TAGS,
     LIST_PATH,
     MAX_PAGE_SIZE,
     PAGE_PATH,
+    RECIPIENTS_PATH,
+    SEND_PATH,
+    SUBTOPICS_PATH,
     Attachment,
     Message,
     MessageAttachmentDownload,
+    MessageConfirmation,
+    MessagePreview,
+    MessageRecipient,
     MessageThread,
     MessageThreadDetail,
+    MessageTopic,
+    _build_compose_payload,
+    _build_message_preview,
     _fetch_page_nonce,
+    _find_recipient,
+    _find_topic,
     _html_to_text,
     _parse_attachments,
     _parse_conversation_details,
     _parse_conversation_list,
     _parse_message,
+    _parse_recipients,
     _parse_thread_summary,
+    _parse_topics,
     _resolve_display_name,
     _safe_filename,
     download_message_attachment,
     fetch_message,
     fetch_messages,
+    list_message_recipients,
+    list_message_topics,
+    send_message,
 )
 
 
@@ -1148,3 +1168,698 @@ async def test_download_message_attachment_passes_organization_id(tmp_path: Path
 
     body = mock_client.request.await_args_list[1].kwargs["json"]
     assert body["organizationId"] == "org-cross-region"
+
+
+# --- send-message: parsers ---
+
+
+def _sample_recipient_row(
+    *,
+    user_id: str = "WP-rec-1",
+    provider_id: str = "WP-prov-1",
+    display: str = "TEST PROVIDER MD",
+    pool_id: str = "",
+    department_id: str = "",
+) -> dict:
+    return {
+        "displayName": display,
+        "userId": user_id,
+        "poolId": pool_id,
+        "providerId": provider_id,
+        "departmentId": department_id,
+    }
+
+
+def test_parse_recipients_top_level_array():
+    row = _sample_recipient_row()
+    recipients = _parse_recipients([row])
+    assert len(recipients) == 1
+    r = recipients[0]
+    assert r.recipient_id == "WP-rec-1"
+    assert r.display_name == "TEST PROVIDER MD"
+    assert r.raw == row
+
+
+def test_parse_recipients_recipients_key_envelope():
+    payload = {"recipients": [_sample_recipient_row()]}
+    recipients = _parse_recipients(payload)
+    assert len(recipients) == 1
+    assert recipients[0].recipient_id == "WP-rec-1"
+
+
+def test_parse_recipients_falls_back_to_provider_id_when_no_user_id():
+    payload = [_sample_recipient_row(user_id="")]
+    recipients = _parse_recipients(payload)
+    assert len(recipients) == 1
+    assert recipients[0].recipient_id == "WP-prov-1"
+
+
+def test_parse_recipients_skips_rows_with_no_id():
+    payload = [_sample_recipient_row(user_id="", provider_id="", pool_id="")]
+    assert _parse_recipients(payload) == []
+
+
+def test_parse_recipients_handles_unknown_envelope_via_recursive_scan():
+    # Imagine Kaiser wraps the list in a deeply unusual key.
+    payload = {"someUnknownKey": [_sample_recipient_row()]}
+    recipients = _parse_recipients(payload)
+    assert len(recipients) == 1
+    assert recipients[0].recipient_id == "WP-rec-1"
+
+
+def test_parse_recipients_returns_empty_on_unparseable_payload():
+    assert _parse_recipients(None) == []
+    assert _parse_recipients({"randomKey": "value"}) == []
+
+
+def test_parse_topics_top_level_array():
+    payload = [
+        {"value": "100", "title": "Upcoming Appointment or Procedure"},
+        {"value": "101", "title": "Non-Urgent Medical Advice"},
+    ]
+    topics = _parse_topics(payload)
+    assert len(topics) == 2
+    assert topics[0].value == "100"
+    assert topics[1].title == "Non-Urgent Medical Advice"
+
+
+def test_parse_topics_subtopics_envelope():
+    payload = {"subtopics": [{"value": "100", "title": "T1"}]}
+    topics = _parse_topics(payload)
+    assert [t.value for t in topics] == ["100"]
+
+
+def test_parse_topics_live_shape_topiclist_envelope_with_display_name():
+    """Verified live response shape (2026-05-03)."""
+    payload = {
+        "topicList": [
+            {"value": "97", "displayName": "Test Results"},
+            {"value": "98", "displayName": "Medication"},
+            {"value": "99", "displayName": "Visit Follow-Up"},
+            {"value": "100", "displayName": "Upcoming Appointment or Procedure"},
+            {"value": "101", "displayName": "Non-Urgent Medical Advice"},
+        ],
+        "organizationId": "",
+    }
+    topics = _parse_topics(payload)
+    assert [t.value for t in topics] == ["97", "98", "99", "100", "101"]
+    assert topics[0].title == "Test Results"
+    assert topics[4].title == "Non-Urgent Medical Advice"
+
+
+def test_parse_topics_prefers_display_name_over_title_when_both_present():
+    payload = {"topicList": [{"value": "100", "displayName": "Display", "title": "Title"}]}
+    topics = _parse_topics(payload)
+    assert topics[0].title == "Display"
+
+
+def test_parse_topics_skips_rows_without_value():
+    payload = [{"title": "broken"}, {"value": "200", "title": "ok"}]
+    topics = _parse_topics(payload)
+    assert [t.value for t in topics] == ["200"]
+
+
+def test_parse_topics_returns_empty_on_unparseable():
+    assert _parse_topics(None) == []
+    assert _parse_topics({"junk": 42}) == []
+
+
+def test_parse_topics_recursive_scan_accepts_display_name_as_title_field():
+    """Even under an unknown wrapper key, scan should accept displayName as a title."""
+    payload = {"someUnusualKey": [{"value": "100", "displayName": "T"}]}
+    topics = _parse_topics(payload)
+    assert [t.value for t in topics] == ["100"]
+    assert topics[0].title == "T"
+
+
+# --- send-message: helpers ---
+
+
+def test_find_recipient_matches_resolved_id():
+    rec = MessageRecipient(recipient_id="WP-1", raw={"userId": "WP-1"})
+    assert _find_recipient([rec], "WP-1") is rec
+    assert _find_recipient([rec], "missing") is None
+
+
+def test_find_recipient_falls_back_to_raw_id_fields():
+    # Caller passed a providerId — we resolved off userId. Should still match.
+    rec = MessageRecipient(recipient_id="WP-user", raw={"userId": "WP-user", "providerId": "WP-prov"})
+    assert _find_recipient([rec], "WP-prov") is rec
+    assert _find_recipient([rec], "WP-pool") is None
+
+
+def test_find_topic_matches_value():
+    topics = [MessageTopic(value="100", title="A"), MessageTopic(value="101", title="B")]
+    assert _find_topic(topics, "101").title == "B"
+    assert _find_topic(topics, "999") is None
+
+
+def test_build_message_preview_can_confirm_when_complete():
+    rec = MessageRecipient(recipient_id="WP-1", display_name="TEST", raw={"userId": "WP-1"})
+    topic = MessageTopic(value="100", title="T")
+    pv = _build_message_preview(
+        recipient=rec,
+        recipient_id_input="WP-1",
+        topic=topic,
+        topic_value_input="100",
+        subject="hi",
+        body_lines=["hello"],
+    )
+    assert pv.can_confirm is True
+    assert pv.warnings == []
+    assert pv.recipient_display_name == "TEST"
+    assert pv.topic_title == "T"
+
+
+def test_build_message_preview_warns_when_recipient_missing():
+    pv = _build_message_preview(
+        recipient=None,
+        recipient_id_input="WP-bogus",
+        topic=MessageTopic(value="100", title="T"),
+        topic_value_input="100",
+        subject="hi",
+        body_lines=["hello"],
+    )
+    assert pv.can_confirm is False
+    assert any("recipient_id" in w for w in pv.warnings)
+
+
+def test_build_message_preview_warns_when_subject_or_body_empty():
+    rec = MessageRecipient(recipient_id="WP-1", raw={"userId": "WP-1"})
+    topic = MessageTopic(value="100", title="T")
+    pv = _build_message_preview(
+        recipient=rec,
+        recipient_id_input="WP-1",
+        topic=topic,
+        topic_value_input="100",
+        subject="",
+        body_lines=[""],
+    )
+    assert pv.can_confirm is False
+    assert any("subject" in w for w in pv.warnings)
+    assert any("body" in w for w in pv.warnings)
+
+
+def test_build_compose_payload_echoes_recipient_raw_fields():
+    rec = MessageRecipient(
+        recipient_id="WP-rec",
+        display_name="TEST PROVIDER",
+        raw={
+            "displayName": "TEST PROVIDER",
+            "userId": "WP-rec",
+            "poolId": "",
+            "providerId": "WP-prov",
+            "departmentId": "",
+            "extraKpField": "preserve me",  # Verify unknown fields survive round-trip.
+        },
+    )
+    topic = MessageTopic(value="100", title="A")
+    body = _build_compose_payload(
+        compose_id="CID",
+        conversation_id="CONV",
+        recipient=rec,
+        topic=topic,
+        subject="subj",
+        body_lines=["line one", "", "line three"],
+    )
+
+    assert body["composeId"] == "CID"
+    assert body["conversationId"] == "CONV"
+    assert body["recipient"]["userId"] == "WP-rec"
+    assert body["recipient"]["extraKpField"] == "preserve me"
+    assert body["topic"] == {"title": "A", "value": "100"}
+    assert body["messageBody"] == ["line one", "", "line three"]
+    assert body["messageSubject"] == "subj"
+    assert body["documentIds"] == []
+    assert body["includeOtherViewers"] is False
+    assert body["organizationId"] == ""
+    # Viewers pulls from recipient.raw if present, else empty wprId.
+    assert body["viewers"] == [{"wprId": ""}]
+
+
+def test_build_compose_payload_pulls_wprid_from_recipient_when_present():
+    rec = MessageRecipient(
+        recipient_id="WP-rec",
+        raw={"userId": "WP-rec", "wprId": "WP-self-viewer"},
+    )
+    body = _build_compose_payload(
+        compose_id="CID",
+        conversation_id="",
+        recipient=rec,
+        topic=MessageTopic(value="100"),
+        subject="s",
+        body_lines=["b"],
+    )
+    assert body["viewers"] == [{"wprId": "WP-self-viewer"}]
+
+
+def test_build_compose_payload_backfills_missing_canonical_keys():
+    rec = MessageRecipient(recipient_id="WP-rec", raw={"userId": "WP-rec"})
+    body = _build_compose_payload(
+        compose_id="CID",
+        conversation_id="",
+        recipient=rec,
+        topic=MessageTopic(value="100"),
+        subject="s",
+        body_lines=["b"],
+    )
+    # Even though raw only had userId, the four canonical keys should be present.
+    for key in ("displayName", "userId", "poolId", "providerId", "departmentId"):
+        assert key in body["recipient"]
+
+
+# --- list_message_recipients HTTP integration ---
+
+
+@pytest.mark.asyncio
+async def test_list_message_recipients_happy_path():
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    responses = [
+        httpx.Response(200, text=_csrf_html()),
+        httpx.Response(200, json=[_sample_recipient_row()]),
+    ]
+    mock_client, p = _patch_http(responses)
+    try:
+        recipients = await list_message_recipients(KaiserRequest(store))
+    finally:
+        p.stop()
+
+    assert len(recipients) == 1
+    assert recipients[0].recipient_id == "WP-rec-1"
+    # Two calls: CSRF GET, recipients POST.
+    assert mock_client.request.await_count == 2
+    post_call = mock_client.request.await_args_list[1]
+    assert post_call.args[0] == "POST"
+    assert RECIPIENTS_PATH in post_call.args[1]
+    assert post_call.kwargs["json"] == {"organizationId": ""}
+    headers = post_call.kwargs["headers"]
+    assert headers["__RequestVerificationToken"] == _FAKE_CSRF
+
+
+@pytest.mark.asyncio
+async def test_list_message_recipients_empty_response_returns_empty_list():
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    responses = [
+        httpx.Response(200, text=_csrf_html()),
+        httpx.Response(200, json={}),
+    ]
+    _, p = _patch_http(responses)
+    try:
+        recipients = await list_message_recipients(KaiserRequest(store))
+    finally:
+        p.stop()
+    assert recipients == []
+
+
+# --- list_message_topics HTTP integration ---
+
+
+@pytest.mark.asyncio
+async def test_list_message_topics_happy_path():
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    responses = [
+        httpx.Response(200, text=_csrf_html()),
+        httpx.Response(200, json=[
+            {"value": "100", "title": "Upcoming Appointment or Procedure"},
+            {"value": "101", "title": "Non-Urgent Medical Advice"},
+        ]),
+    ]
+    mock_client, p = _patch_http(responses)
+    try:
+        topics = await list_message_topics(KaiserRequest(store))
+    finally:
+        p.stop()
+
+    assert [t.value for t in topics] == ["100", "101"]
+    post_call = mock_client.request.await_args_list[1]
+    assert SUBTOPICS_PATH in post_call.args[1]
+
+
+# --- send_message: input validation + preview ---
+
+
+@pytest.mark.asyncio
+async def test_send_message_rejects_empty_recipient_id():
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    with pytest.raises(ValueError, match="recipient_id"):
+        await send_message(
+            KaiserRequest(store),
+            recipient_id="   ",
+            topic_value="100",
+            subject="s",
+            body="b",
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_message_rejects_empty_topic_value():
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    with pytest.raises(ValueError, match="topic_value"):
+        await send_message(
+            KaiserRequest(store),
+            recipient_id="WP-rec",
+            topic_value="",
+            subject="s",
+            body="b",
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_message_preview_path_is_read_only(monkeypatch):
+    """confirm=False fetches catalogs, builds preview, never POSTs to compose endpoints."""
+    monkeypatch.delenv(DRY_RUN_ENV, raising=False)
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    responses = [
+        httpx.Response(200, text=_csrf_html()),                          # CSRF for the whole flow
+        httpx.Response(200, text=_csrf_html()),                          # CSRF inside list_message_recipients
+        httpx.Response(200, json=[_sample_recipient_row(user_id="WP-rec")]),
+        httpx.Response(200, text=_csrf_html()),                          # CSRF inside list_message_topics
+        httpx.Response(200, json=[{"value": "100", "title": "T"}]),
+    ]
+    mock_client, p = _patch_http(responses)
+    try:
+        result = await send_message(
+            KaiserRequest(store),
+            recipient_id="WP-rec",
+            topic_value="100",
+            subject="hello",
+            body="this is the body",
+            confirm=False,
+        )
+    finally:
+        p.stop()
+
+    assert isinstance(result, MessagePreview)
+    assert result.can_confirm is True
+    assert result.warnings == []
+    assert result.recipient_display_name == "TEST PROVIDER MD"
+    assert result.topic_title == "T"
+    assert result.body_line_count == 1
+
+    # No POST to any compose-related endpoint.
+    posted_paths = [
+        c.args[1] for c in mock_client.request.await_args_list
+        if c.args[0] == "POST"
+    ]
+    for path in posted_paths:
+        assert COMPOSE_ID_PATH not in path
+        assert DRAFT_SAVE_PATH not in path
+        assert SEND_PATH not in path
+
+
+@pytest.mark.asyncio
+async def test_send_message_preview_with_unknown_recipient_blocks_confirm(monkeypatch):
+    monkeypatch.delenv(DRY_RUN_ENV, raising=False)
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    responses = [
+        httpx.Response(200, text=_csrf_html()),                  # CSRF for the whole flow
+        httpx.Response(200, text=_csrf_html()),                  # CSRF inside recipients
+        httpx.Response(200, json=[_sample_recipient_row()]),     # one recipient WP-rec-1
+        httpx.Response(200, text=_csrf_html()),                  # CSRF inside topics
+        httpx.Response(200, json=[{"value": "100", "title": "T"}]),
+    ]
+    _, p = _patch_http(responses)
+    try:
+        result = await send_message(
+            KaiserRequest(store),
+            recipient_id="WP-NOPE",
+            topic_value="100",
+            subject="s",
+            body="b",
+            confirm=False,
+        )
+    finally:
+        p.stop()
+
+    assert isinstance(result, MessagePreview)
+    assert result.can_confirm is False
+    assert any("recipient_id" in w for w in result.warnings)
+
+
+@pytest.mark.asyncio
+async def test_send_message_confirm_refuses_when_preview_blocks(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv(DRY_RUN_ENV, raising=False)
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    responses = [
+        httpx.Response(200, text=_csrf_html()),                  # CSRF for whole flow
+        httpx.Response(200, text=_csrf_html()),                  # CSRF inside recipients
+        httpx.Response(200, json=[_sample_recipient_row()]),
+        httpx.Response(200, text=_csrf_html()),                  # CSRF inside topics
+        httpx.Response(200, json=[{"value": "100", "title": "T"}]),
+    ]
+    _, p = _patch_http(responses)
+    try:
+        with pytest.raises(ValueError, match="not committable"):
+            await send_message(
+                KaiserRequest(store),
+                recipient_id="WP-NOPE",
+                topic_value="100",
+                subject="s",
+                body="b",
+                confirm=True,
+                data_dir=tmp_path,
+            )
+    finally:
+        p.stop()
+
+
+@pytest.mark.asyncio
+async def test_send_message_confirm_requires_data_dir(monkeypatch):
+    monkeypatch.delenv(DRY_RUN_ENV, raising=False)
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    responses = [
+        httpx.Response(200, text=_csrf_html()),                  # CSRF for whole flow
+        httpx.Response(200, text=_csrf_html()),                  # CSRF inside recipients
+        httpx.Response(200, json=[_sample_recipient_row(user_id="WP-rec")]),
+        httpx.Response(200, text=_csrf_html()),                  # CSRF inside topics
+        httpx.Response(200, json=[{"value": "100", "title": "T"}]),
+    ]
+    _, p = _patch_http(responses)
+    try:
+        with pytest.raises(ValueError, match="data_dir"):
+            await send_message(
+                KaiserRequest(store),
+                recipient_id="WP-rec",
+                topic_value="100",
+                subject="s",
+                body="b",
+                confirm=True,
+                # data_dir omitted on purpose.
+            )
+    finally:
+        p.stop()
+
+
+# --- send_message: dry-run + commit ---
+
+
+@pytest.mark.asyncio
+async def test_send_message_dry_run_short_circuits(tmp_path: Path, monkeypatch):
+    """confirm=True under OPENKP_DRY_RUN=1 runs prep but skips the actual Send POST."""
+    monkeypatch.setenv(DRY_RUN_ENV, "1")
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    responses = [
+        httpx.Response(200, text=_csrf_html()),                              # CSRF for whole flow
+        httpx.Response(200, text=_csrf_html()),                              # CSRF inside recipients
+        httpx.Response(200, json=[_sample_recipient_row(user_id="WP-rec")]),
+        httpx.Response(200, text=_csrf_html()),                              # CSRF inside topics
+        httpx.Response(200, json=[{"value": "100", "title": "T"}]),
+        httpx.Response(200, json={"composeId": "CID-123"}),                  # GetComposeId
+        httpx.Response(200, json={"conversationId": "CONV-1"}),              # SaveDraft
+        # NO Send POST under dry-run.
+        httpx.Response(200, json={}),                                        # RemoveComposeId cleanup
+    ]
+    mock_client, p = _patch_http(responses)
+    try:
+        result = await send_message(
+            KaiserRequest(store),
+            recipient_id="WP-rec",
+            topic_value="100",
+            subject="hello",
+            body="line one\nline two",
+            confirm=True,
+            data_dir=tmp_path,
+        )
+    finally:
+        p.stop()
+
+    assert isinstance(result, MessageConfirmation)
+    assert result.dry_run is True
+    assert result.succeeded is True
+    assert result.conversation_id == "CONV-1"
+    assert result.subject == "hello"
+
+    # Verify the Send endpoint was NOT called.
+    posted_paths = [
+        c.args[1] for c in mock_client.request.await_args_list
+        if c.args[0] == "POST"
+    ]
+    assert not any(SEND_PATH in p for p in posted_paths)
+    # SaveDraft and ComposeId WERE called.
+    assert any(COMPOSE_ID_PATH in p for p in posted_paths)
+    assert any(DRAFT_SAVE_PATH in p for p in posted_paths)
+
+    # Audit log: intent + result, both with dry_run=True.
+    audit_lines = (tmp_path / "audit.log").read_text(encoding="utf-8").splitlines()
+    assert len(audit_lines) == 2
+    import json as _json
+    intent = _json.loads(audit_lines[0])
+    result_event = _json.loads(audit_lines[1])
+    assert intent["phase"] == "intent"
+    assert intent["dry_run"] is True
+    assert result_event["phase"] == "result"
+    assert result_event["dry_run"] is True
+    assert result_event["succeeded"] is True
+    # PHI discipline: subject + body text must NOT be in the audit log.
+    assert "hello" not in audit_lines[0]
+    assert "hello" not in audit_lines[1]
+    assert "line one" not in audit_lines[0]
+    assert "line one" not in audit_lines[1]
+
+
+@pytest.mark.asyncio
+async def test_send_message_commit_happy_path(tmp_path: Path, monkeypatch):
+    """confirm=True without dry-run runs the full GetComposeId → SaveDraft → Send chain."""
+    monkeypatch.delenv(DRY_RUN_ENV, raising=False)
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    responses = [
+        httpx.Response(200, text=_csrf_html()),                              # CSRF for whole flow
+        httpx.Response(200, text=_csrf_html()),                              # CSRF inside recipients
+        httpx.Response(200, json=[_sample_recipient_row(user_id="WP-rec")]),
+        httpx.Response(200, text=_csrf_html()),                              # CSRF inside topics
+        httpx.Response(200, json=[{"value": "100", "title": "T"}]),
+        httpx.Response(200, json={"composeId": "CID-1"}),                    # GetComposeId
+        httpx.Response(200, json={"conversationId": "CONV-1"}),              # SaveDraft
+        httpx.Response(200, json={}),                                        # Send (200 = success)
+        httpx.Response(200, json={}),                                        # RemoveComposeId cleanup
+    ]
+    mock_client, p = _patch_http(responses)
+    try:
+        result = await send_message(
+            KaiserRequest(store),
+            recipient_id="WP-rec",
+            topic_value="100",
+            subject="hi",
+            body="b",
+            confirm=True,
+            data_dir=tmp_path,
+        )
+    finally:
+        p.stop()
+
+    assert isinstance(result, MessageConfirmation)
+    assert result.succeeded is True
+    assert result.dry_run is False
+    assert result.conversation_id == "CONV-1"
+
+    posted_paths = [
+        c.args[1] for c in mock_client.request.await_args_list
+        if c.args[0] == "POST"
+    ]
+    assert any(SEND_PATH in p for p in posted_paths)
+    # Verify Send body shape: contains the conversationId from SaveDraft.
+    send_call = next(
+        c for c in mock_client.request.await_args_list
+        if c.args[0] == "POST" and SEND_PATH in c.args[1]
+    )
+    send_body = send_call.kwargs["json"]
+    assert send_body["conversationId"] == "CONV-1"
+    assert send_body["composeId"] == "CID-1"
+    assert send_body["messageSubject"] == "hi"
+    assert send_body["messageBody"] == ["b"]
+
+
+@pytest.mark.asyncio
+async def test_send_message_commit_records_error_on_send_failure(tmp_path: Path, monkeypatch):
+    """A non-2xx on Send writes an error event to the audit log and re-raises."""
+    monkeypatch.delenv(DRY_RUN_ENV, raising=False)
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    responses = [
+        httpx.Response(200, text=_csrf_html()),                              # CSRF for whole flow
+        httpx.Response(200, text=_csrf_html()),                              # CSRF inside recipients
+        httpx.Response(200, json=[_sample_recipient_row(user_id="WP-rec")]),
+        httpx.Response(200, text=_csrf_html()),                              # CSRF inside topics
+        httpx.Response(200, json=[{"value": "100", "title": "T"}]),
+        httpx.Response(200, json={"composeId": "CID-1"}),                    # GetComposeId
+        httpx.Response(200, json={"conversationId": "CONV-1"}),              # SaveDraft
+        httpx.Response(500, json={"error": "boom"}),                         # Send fails
+        httpx.Response(200, json={}),                                        # RemoveComposeId cleanup (best-effort)
+    ]
+    _, p = _patch_http(responses)
+    try:
+        with pytest.raises(httpx.HTTPStatusError):
+            await send_message(
+                KaiserRequest(store),
+                recipient_id="WP-rec",
+                topic_value="100",
+                subject="hi",
+                body="b",
+                confirm=True,
+                data_dir=tmp_path,
+            )
+    finally:
+        p.stop()
+
+    audit_lines = (tmp_path / "audit.log").read_text(encoding="utf-8").splitlines()
+    assert len(audit_lines) == 2
+    import json as _json
+    intent = _json.loads(audit_lines[0])
+    err = _json.loads(audit_lines[1])
+    assert intent["phase"] == "intent"
+    assert err["phase"] == "error"
+    assert err["error_type"] == "HTTPStatusError"
+
+
+@pytest.mark.asyncio
+async def test_send_message_compose_id_missing_raises_runtime_error(tmp_path: Path, monkeypatch):
+    """If GetComposeId returns no composeId, we raise — never proceed without one."""
+    monkeypatch.delenv(DRY_RUN_ENV, raising=False)
+    from openkp.scrapers.request import KaiserRequest
+
+    store = _make_store()
+    responses = [
+        httpx.Response(200, text=_csrf_html()),                              # CSRF for whole flow
+        httpx.Response(200, text=_csrf_html()),                              # CSRF inside recipients
+        httpx.Response(200, json=[_sample_recipient_row(user_id="WP-rec")]),
+        httpx.Response(200, text=_csrf_html()),                              # CSRF inside topics
+        httpx.Response(200, json=[{"value": "100", "title": "T"}]),
+        httpx.Response(200, json={}),                                        # GetComposeId returns nothing
+    ]
+    _, p = _patch_http(responses)
+    try:
+        with pytest.raises(RuntimeError, match="GetComposeId"):
+            await send_message(
+                KaiserRequest(store),
+                recipient_id="WP-rec",
+                topic_value="100",
+                subject="hi",
+                body="b",
+                confirm=True,
+                data_dir=tmp_path,
+            )
+    finally:
+        p.stop()

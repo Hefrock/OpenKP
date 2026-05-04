@@ -9,10 +9,15 @@ Source HAR: `docs/research/captures/kp-messages-2.har`, 2026-04-23.
 | Folder list (badge counts) | `POST /mychartcn/api/conversations/GetFoldersList` | 🟡 Mapped, not yet surfaced as a tool |
 | List threads (+ search + pagination) | `POST /mychartcn/api/conversations/GetConversationList` | ✅ Mapped, implemented |
 | Read one thread (all messages) | `POST /mychartcn/api/conversations/GetConversationDetails` | ✅ Mapped, implemented |
-| Compose / reply | unknown | 🔴 Phase 3 write, not captured |
+| Compose new message | `GetComposeId` → `SaveMedicalAdviceRequestDraft` → `SendMedicalAdviceRequest` | ✅ Mapped, implemented (mail-only, see §send) |
+| Discard draft | `RemoveComposeId` + `DeleteMedicalAdviceRequestDraft` | ✅ Mapped, implemented |
+| List recipients | `GetMedicalAdviceRequestRecipients` | ✅ Mapped, implemented |
+| List topics | `GetSubtopics` | ✅ Mapped, implemented |
+| Reply to thread | unknown | 🔴 Not yet captured |
 | Download attachment | `GetDocumentDetailsLegacy` → `GET /Documents/ViewDocument/Download` | ✅ Mapped, implemented |
 
-MCP tools registered: `list_messages`, `read_message`, `download_message_attachment`.
+MCP tools registered: `list_messages`, `read_message`, `download_message_attachment`,
+`list_message_recipients`, `list_message_topics`, `send_message`.
 
 ## Auth / anti-forgery — two separate tokens required
 
@@ -388,16 +393,284 @@ generation step (message attachments are static files Kaiser stored once).
 - **No `no_pdf_available` outcome.** The caller already has a `dcs_id` from
   `read_message`, which means the attachment exists.
 
-## Known unknowns
+## Send new message — `SendMedicalAdviceRequest` and friends
 
-- **Compose / reply endpoint.** Phase 3 write. Not captured.
+Source HAR: `kp-send-message-to-provider.har` (real send, 2026-05-03) +
+`kp-compose-message2.har` (compose-and-discard with topic switch + attachment
+upload, 2026-05-03).
+
+Kaiser's UI calls this flow "Non-Urgent Medical Advice" / "Message your care
+team" — internally it's a **medical advice request**, distinct from the
+generic conversations API used for read paths. All endpoints sit under
+`/mychartcn/api/medicaladvicerequests/*` (and a few helpers under
+`/mychartcn/api/conversations/*`). Same anti-forgery contract as the read
+endpoints (`__RequestVerificationToken` header), but **no `PageNonce`** in
+the body.
+
+> **Response-body capture gap.** Chrome DevTools' HAR exporter has a small
+> circular buffer for response bodies. The 690 KB `GetConversationList`
+> response that fires when the inbox loads evicts every other body. So the
+> request-body shapes below are verified against live Kaiser, but the
+> **response shapes are inferred** (from response sizes, the IDs that
+> subsequent requests echo back, and the labels visible in the UI). The
+> first live test will validate them — see "Open response-shape questions"
+> at the end of this section.
+
+### Flow at a glance
+
+```
+                      ┌─────────────────────────────────────┐
+                      │ POST GetComposeId                   │ → composeId
+                      └─────────────────────────────────────┘
+                                     │
+                      ┌─────────────────────────────────────┐
+                      │ POST GetSubtopics  (catalog)        │ ↘
+                      │ POST GetMedicalAdviceRequestRecipi… │  prep
+                      │ POST GetViewers                     │ ↗
+                      └─────────────────────────────────────┘
+                                     │
+                      ┌─────────────────────────────────────┐
+                      │ POST SaveMedicalAdviceRequestDraft  │ → conversationId  (1st save)
+                      └─────────────────────────────────────┘
+                                     │
+                      ┌─────────────────────────────────────┐
+                      │ POST SendMedicalAdviceRequest       │ → 200 = sent
+                      └─────────────────────────────────────┘
+                                     │
+                      ┌─────────────────────────────────────┐
+                      │ POST RemoveComposeId  (cleanup)     │
+                      └─────────────────────────────────────┘
+```
+
+Discard path (close compose without sending):
+
+```
+RemoveComposeId  →  DeleteMedicalAdviceRequestDraft({conversationId})
+```
+
+OpenKP collapses the prep + draft + send into one `send_message` call. We
+skip the `GetMessageMenuSettings` / `LogMessageMenuItemSelected` /
+`GetDisclaimer` / `GetConversationsToContinue` calls — they're UI-only
+chrome.
+
+### `POST /mychartcn/api/conversations/GetComposeId`
+
+Generates a per-compose token that ties the subsequent SaveDraft / Send /
+RemoveComposeId calls together. Without it the SaveDraft endpoint rejects.
+
+**Request body:** `{}` (literally empty object).
+
+**Response (inferred, ~126 bytes):** `{"composeId": "WP-…"}` — the token is
+~100 chars of `WP-`-prefixed encoded bytes (Kaiser's standard ID format).
+
+### `POST /mychartcn/api/medicaladvicerequests/GetSubtopics`
+
+Returns the topic catalog — the dropdown labelled "Reason for Message" in
+the UI.
+
+**Request body:**
+
+```json
+{ "organizationId": "" }
+```
+
+**Response shape (verified live, 2026-05-03):**
+
+```json
+{
+  "topicList": [
+    {"value": "97",  "displayName": "Test Results"},
+    {"value": "98",  "displayName": "Medication"},
+    {"value": "99",  "displayName": "Visit Follow-Up"},
+    {"value": "100", "displayName": "Upcoming Appointment or Procedure"},
+    {"value": "101", "displayName": "Non-Urgent Medical Advice"}
+  ],
+  "organizationId": ""
+}
+```
+
+| `value` | `displayName` |
+| --- | --- |
+| `97`  | Test Results |
+| `98`  | Medication |
+| `99`  | Visit Follow-Up |
+| `100` | Upcoming Appointment or Procedure |
+| `101` | Non-Urgent Medical Advice |
+
+Two notable parser gotchas the first live call exposed:
+
+- Wrapper key is **`topicList`** (camelCase, capital L). Not `topics` /
+  `subtopics` / `data`.
+- Title field is **`displayName`**, not `title`. Our parser now accepts
+  `displayName` first, then `title` / `name` / `label` for forward compat.
+
+### `POST /mychartcn/api/medicaladvicerequests/GetMedicalAdviceRequestRecipients`
+
+Returns the providers and pools the patient is allowed to message.
+
+**Request body:**
+
+```json
+{ "organizationId": "" }
+```
+
+**Response shape (one recipient, inferred from the verbatim shape echoed
+back in subsequent SaveDraft / Send bodies):**
+
+```json
+{
+  "displayName": "PROVIDER ONE MD",
+  "userId":      "WP-…",
+  "poolId":      "",
+  "providerId":  "WP-…",
+  "departmentId":""
+}
+```
+
+The 6.6 KB response size is consistent with ~10–15 recipients (PCP,
+specialists with prior visits, advice-line pools). Order in the UI screenshot:
+PCP first, then alphabetical.
+
+### `POST /mychartcn/api/medicaladvicerequests/GetViewers`
+
+Returns the patient's own self-viewer ID, used as the sole entry in the
+SaveDraft / Send `viewers` array. (The "viewers" mechanism supports proxy
+access — e.g. a parent messaging on behalf of a minor child — but for v1
+we always send self-viewer.)
+
+**Request body:**
+
+```json
+{ "organizationId": "" }
+```
+
+**Response (inferred):** `{"viewers": [{"wprId": "WP-…", "displayName": "…", "isSelf": true, …}], …}`
+
+Total 323 bytes, so very thin.
+
+### `POST /mychartcn/api/medicaladvicerequests/SaveMedicalAdviceRequestDraft`
+
+Saves the in-progress message. The first call returns Kaiser's
+`conversationId`, which subsequent calls (and the final Send) echo back.
+The MyChart UI fires this on every keystroke — OpenKP fires it once.
+
+**Request body:**
+
+```json
+{
+  "recipient": {
+    "displayName": "PROVIDER ONE MD",
+    "userId":      "WP-…",
+    "poolId":      "",
+    "providerId":  "WP-…",
+    "departmentId":""
+  },
+  "topic":          { "title": "Non-Urgent Medical Advice", "value": "101" },
+  "conversationId": "",
+  "organizationId": "",
+  "viewers":        [ { "wprId": "WP-…" } ],
+  "messageBody":    [ "" ],
+  "messageSubject": "",
+  "documentIds":    [],
+  "includeOtherViewers": false,
+  "composeId":      "WP-…"
+}
+```
+
+- `messageBody` is an **array of strings**, one per line (not a single
+  string). Empty lines preserved as `""`. The KP UI splits by newline and
+  posts the array verbatim.
+- `conversationId` empty on the first call; populated thereafter.
+- `documentIds` is the file IDs returned by `UploadFile` (out of scope for
+  v1 send).
+
+**Response (inferred, ~123 bytes):** `{"conversationId": "WP-…"}` (~100 chars
+token + JSON wrapping).
+
+### `POST /mychartcn/api/medicaladvicerequests/SendMedicalAdviceRequest`
+
+The actual send. Same payload shape as SaveDraft, but `conversationId`
+must be the one SaveDraft just returned. After this returns 200, the
+message is in the recipient's queue.
+
+**Request body:** identical to SaveDraft, with `conversationId` populated
+and `messageSubject` + `messageBody` finalized.
+
+**Response (inferred, ~86 bytes):** unknown — likely `{"success": true}` or
+`{"sent": true}` or the conversationId echoed back. We only check HTTP 200,
+so the body shape is non-load-bearing.
+
+### `POST /mychartcn/api/conversations/RemoveComposeId`
+
+Releases the compose token. Always called after Send (and after a
+discard).
+
+**Request body:**
+
+```json
+{ "composeId": "WP-…" }
+```
+
+**Response (~126 bytes):** ack, shape unknown.
+
+### `POST /mychartcn/api/medicaladvicerequests/DeleteMedicalAdviceRequestDraft`
+
+Discard path only. Fires after the user picks "Discard draft" in the
+"Message in progress" confirmation dialog. The saved draft is permanently
+removed.
+
+**Request body:**
+
+```json
+{ "conversationId": "WP-…", "organizationId": "" }
+```
+
+OpenKP doesn't currently expose this — `send_message` either commits or
+short-circuits on preview, neither leaves a draft behind. If we ever add a
+draft-only mode, this is the rollback hook.
+
+### `POST /mychartcn/api/medicaladvicerequests/UploadFile`
+
+Captured but **not implemented in v1**. The UI uses this to attach files
+(passport.jpg in our compose-2 capture). Returns a document ID:
+
+```
+WP-24l0-2FcBmgy5XC6sSNTcoY1tQ-3D-3D-24ZhsRP4d16cTleIiYIA2ACtCh4Jnnrsvseq0e2DfK3g0-3D
+```
+
+…that the next SaveDraft includes in `documentIds[]`. Future work.
+
+### Open response-shape questions
+
+The first live calls to the new tools will resolve these. Permissive
+parsers in `messages.py` log the raw response when an unexpected shape
+appears, so we capture a real example without breaking the user's call.
+
+1. ~~**`GetSubtopics` envelope.** Is it `[{title,value},…]` (raw array) or
+   `{topics:[…]}` or `{subtopics:[…]}`?~~ **Resolved 2026-05-03**:
+   `{"topicList": [{"value":..., "displayName":...}], "organizationId":""}`.
+2. **`GetMedicalAdviceRequestRecipients` envelope.** Same question — top-level
+   array vs. wrapper object. (Live call returned 12 recipients cleanly,
+   so the recursive fallback caught it; exact wrapper key not yet confirmed.)
+3. **`GetViewers` field name for self-viewer wprId.** Is it `wprId` or
+   `viewerId`? Both have appeared in Epic captures elsewhere.
+4. **`SendMedicalAdviceRequest` success body.** 86 bytes — likely a tiny ack
+   or status flag. Unimportant for correctness (we use HTTP 200 as truth)
+   but worth recording for diagnostics.
+
+## Other known unknowns
+
+- **Reply to an existing thread.** The send flow above starts a *new*
+  conversation. The "Reply" button on an opened thread almost certainly
+  hits a different endpoint that takes the parent thread id. Needs a fresh
+  HAR.
 - **Mark-as-read.** When the user opens a thread in the UI, Kaiser probably
-  fires a side call to flip `isUnread`. Not captured in our HAR (or it may
-  happen implicitly on `GetConversationDetails`). If important, a follow-up
-  capture of opening an unread thread with the Network panel active would
-  clarify.
+  fires a side call to flip `isUnread`. Not captured.
 - **`legacyMessageDetailsUrl`.** Every conversation carries one. Appears to
   be a URL into the legacy UI. We ignore it.
+- **Send-flow attachments.** `UploadFile` body shape (multipart, not JSON)
+  is not implemented. v1 `send_message` rejects calls that include
+  attachments.
 
 ## PHI discipline
 

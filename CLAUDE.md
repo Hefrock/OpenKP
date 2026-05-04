@@ -19,7 +19,7 @@ What this means for current work:
 
 See `DESIGN.md` §1 (audience), §5 (Phase 4 / 4.5), §10 (distribution strategy).
 
-## Current state (2026-04-25)
+## Current state (2026-05-03)
 
 - **Phase 0 scaffold:** complete.
 - **Phase 1 auth:** complete. Silent session reuse via `~/.openkp/session.json` + httpx probe to `/mychartcn/keepalive.asp`. Interactive first-run Chromium, silent after. See ADR-005 and `docs/recon/session-2.md`.
@@ -33,21 +33,28 @@ See `DESIGN.md` §1 (audience), §5 (Phase 4 / 4.5), §10 (distribution strategy
 - **Phase 3 write tools:** underway.
   - `request_refill(medication_id, confirm=False)` ✅ shipped 2026-04-25 (mail-only v1). Two-call confirm pattern, audit log + dry-run scaffolding. **Preview path live-verified, commit path pending next real refill cycle.** See `docs/recon/session-11.md`.
   - `track_refill_order(order_number)` ✅ shipped + live-verified 2026-04-27 (read sibling to request_refill). Single GET against `/orderDetails`. Surfaces order status (INPROGRESS / SHIPPED / DELIVERED), per-Rx detail, shipping address, payment last-4 / type / expiry, and a derived `tracking_ids` list. **Both INPROGRESS (HAR) and SHIPPED (live, 2026-04-27) verified against real Kaiser data.** Confirmed: `copay` on rxList entries populates post-adjudication (null on INPROGRESS, real $ once shipped), and `SHIPPED` is a real intermediate state where `digitalStatus="Complete"` even though `trackingId` is still empty (carrier handoff lags by hours/days). DELIVERED transition still unverified. See `docs/recon/session-13.md`.
+  - `send_message(recipient_id, topic_value, subject, body, confirm=False)` + `list_message_recipients()` + `list_message_topics()` ✅ shipped 2026-05-03 (preview path live-verified, commit path unit-tested only). Two-call confirm pattern mirroring `request_refill`. Sits on `/mychartcn/api/medicaladvicerequests/*` (Kaiser's "Non-Urgent Medical Advice" / "Message your care team" surface). Five-step server-side chain collapsed into one tool: GetComposeId → SaveDraft (mints conversationId) → Send → RemoveComposeId. Audit log records intent/result/error with **subject and body NOT logged** (recipient name, topic, line count only). v1 limits: no attachments, no reply-to-existing-thread (always starts new conversation). Topic catalog discovered live: `97` Test Results / `98` Medication / `99` Visit Follow-Up / `100` Upcoming Appointment or Procedure / `101` Non-Urgent Medical Advice. See `docs/research/endpoints/messages.md` "Send new message" section and `docs/recon/session-14.md`.
 - **Late-Phase-2 attachments + deep search:**
   - `download_message_attachment` ✅ shipped + live-verified 2026-04-25 (session 12). Two-step chain (`GetDocumentDetailsLegacy` → binary GET). Saves to `~/.openkp/downloads/`. Genetic panels and other clinically important documents arrive as message attachments — Kaiser doesn't surface them in test-results.
   - `list_messages(deep_search=True, max_pages=30)` ✅ shipped + live-verified 2026-04-25 (session 12). Walks pagination via `localSummary.oldestSearchedInstantISO` because Kaiser's `searchQuery` is page-scoped, not index-scoped (default search misses anything older than the most recent ~50 threads). Use this when looking for archival messages. See `docs/research/endpoints/messages.md` "Search" section and `docs/recon/session-12.md`.
 
-**Tests:** 397 passing. Run with `.venv/bin/pytest -q` from `openkp/`.
+**Tests:** 432 passing. Run with `.venv/bin/pytest -q` from `openkp/`.
 
 ## Next session: start here
 
-**Two clean candidates, depending on appetite for capture work:**
+**Top candidates, in rough priority order:**
 
-1. **`send_message` / `reply_to_message`** — needs a fresh HAR capture before coding. Higher-risk write tools (compose new content vs. echo-and-forward state like `request_refill`), so plan for careful preview/confirm patterning. Probably the highest-leverage Phase 3 finish.
+1. **README polish + PHI audit for v1 public release** — the v1 release blocker per this file. No new endpoints, just tightening docs and double-checking that no PHI is leaking through code comments, recon journals, or error messages.
 
-2. **README polish + PHI audit for v1 public release** — no new endpoints, just tightening docs and double-checking that no PHI is leaking through code comments, recon journals, or error messages. The audit is the v1 release blocker per CLAUDE.md.
+2. **`reply_to_message(thread_id, body)`** — natural sibling to `send_message`. Needs a fresh HAR capture (the "Reply" button on an opened thread almost certainly hits a different endpoint than compose). Lower-risk than `send_message` because we're not picking a recipient — the thread already names one.
+
+3. **`send_message` polish from session 14 review:**
+   - **PCP role label fallback:** Provider One's `role` came back null because her `specialty` and `pcpTypeDisplayName` are empty strings. Derive `"Primary Care"` from `recipientType == 1` so the UI/caller has something to display.
+   - **OOC awareness:** the recipient catalog carries `oocDateISO` and `oocContextString` for providers who are out of office. Surface those as fields on `MessageRecipient` so the preview can flag "your provider is out of office until X" before the user commits.
+   - **`body_preview` rename or cap:** today's field name suggests truncation but the implementation only truncates above 200 chars. Either rename to `body` (full echo always) or always cap with `...` suffix when longer.
 
 **Loose ends (optional, not blocking):**
+- **Live-verify the `send_message` commit path** next time you actually need to message a provider. Today only the preview path was hit live; the GetComposeId / SaveDraft / Send chain is theoretical-correct + unit-tested but not yet exercised against Kaiser. Tail `~/.openkp/audit.log` from the dev session before you fire `confirm=True` so events stream live.
 - Verify the DELIVERED transition for the chlorthalidone order from session 11 next time you're in OpenKP. The order number sits in `docs/research/captures/kp-refill-2-with-order-details.har` (gitignored) and the SHIPPED state is already snapshot in session-13.md. The remaining unknowns are the carrier-tracking-attached state and the DELIVERED transition.
 - Live-verify `list_messages(deep_search=True)` from Cowork. The download tool was end-to-end verified in session 12, but the deep_search code path wasn't called explicitly — Cowork-Claude effectively reproduced the algorithm manually with `before_iso` walking.
 - Spot-check whether MyChart "Documents" / "Visit Notes" / "After Visit Summary" sections hold reports OpenKP doesn't reach. Session 12 confirmed genetic panels can come through messages, but other scanned reports (letters, outside records) might live elsewhere.
@@ -55,7 +62,8 @@ See `DESIGN.md` §1 (audience), §5 (Phase 4 / 4.5), §10 (distribution strategy
 ## Read these first
 
 - `DESIGN.md` — vision, principles, architecture, roadmap, tool inventory, safety patterns. Single source of truth.
-- `docs/recon/session-13.md` — most recent session: track_refill_order shipped (read sibling to request_refill). Read this for the latest context before starting tomorrow.
+- `docs/recon/session-14.md` — most recent session: send_message ships (preview live-verified) plus list_message_recipients + list_message_topics. Includes the live-discovered topic catalog and the parser-loop story (envelope was `topicList` with `displayName`, not `topics` with `title`).
+- `docs/recon/session-13.md` — track_refill_order shipped (read sibling to request_refill).
 - `docs/recon/session-12.md` — download_message_attachment + list_messages(deep_search=True) shipped to close the genetic-info retrieval flow.
 - `docs/recon/session-11.md` — the request_refill ship and Phase 3 opening narrative.
 - `docs/adr/README.md` — architectural decisions index. ADRs 001-006 live here.
