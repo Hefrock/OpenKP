@@ -57,6 +57,44 @@ The password never touches OpenKP — not in keyring, not in env, not in memory.
 
 ---
 
+## `set_results_release_preferences(...)` — control test-result auto-release timing
+
+**Use case:** Kaiser auto-releases lab and imaging results to MyChart on a schedule that doesn't always match the patient's preference. Some patients want results delayed until their doctor has had a chance to review and contextualize them — a critical-value lab seen at 11pm with no clinician available is more anxiety than information. MyChart already exposes a per-result-type release-timing toggle; the patient just has to find it. A Claude-driven flow ("delay my pathology results until my doctor reviews them") would surface a control most members don't know exists.
+
+**Shape:** Phase 3 write tool with the confirm-before-act pattern. Read sibling `get_results_release_preferences()` returns the current settings; the write call submits the change.
+
+- `POST /mychartcn/api/test-results/GetResultsReleasePreferences` body `{}` — read side, ~163 B response.
+- `POST /mychartcn/api/test-results/SetResultsReleasePreferences` — write side, body shape unknown (HAR captured 2026-05-06 had bodies stripped).
+- Audit log records intent + result with no PHI in the message.
+
+**What's missing:**
+- Fresh HAR with response bodies preserved to learn the preference shape (per-result-category? per-result-type? boolean delay vs. duration?).
+- Endpoint map in `docs/research/endpoints/labs.md` (an "Adjacent endpoints worth noting" stub already exists, 2026-05-06).
+- Scraper + tool registration + tests modeled on `request_refill`'s confirm pattern.
+
+**Non-goal:** Don't editorialize about whether delayed release is "better." Just expose the control.
+
+---
+
+## `download_appointment_ics(csn)` — calendar file for one appointment
+
+**Use case:** Kaiser already generates `.ics` files for appointments — they're behind the "Add to calendar" button on the visit-details page. Surfacing this as a tool means a member can ask "add my next two appointments to my calendar" and Claude can save the files into `~/.openkp/downloads/` (or write them straight into a calendar via a future MCP integration). Tiny but useful.
+
+**Shape:** Single GET against an endpoint that returns text/calendar bytes. No CSRF, no nonce — same `/mychartcn/Visits/...` family.
+
+- `GET /mychartcn/Visits/VisitDetails/GetCalendarFile?csn=<csn>&details=true`
+- Saves to `~/.openkp/downloads/appointment-<csn-prefix>-<date>.ics`.
+- The `csn` is already exposed by `list_appointments` and `list_past_visits`, so callers can chain naturally.
+
+**What's missing:**
+- Implementation in `scrapers/appointments.py` (or a new `calendar.py` if the file grows). Follows the existing PDF-download pattern from `download_lab_result_pdf`.
+- Tests modeled on `test_download_lab_result_pdf`.
+- One line of MCP tool registration.
+
+**Non-goal:** Don't parse the .ics into a structured object — Kaiser's bytes are the source of truth, and downstream calendar apps already know how to consume the format.
+
+---
+
 ## Adding to the wishlist
 
 Keep entries tight. Use case + shape + what's missing + any non-goals. If an idea is just "would be nice if..." with no concrete shape, leave it out — the discipline is the point.

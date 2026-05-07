@@ -347,6 +347,8 @@ The full tool surface we're targeting, grouped by phase. The use cases in Sectio
 | `get_insurance` | Active coverage, plan, renewal | `plan_name`, `member_id`, `effective_date`, `renewal_date` |
 | `list_medications` | Current and recent medications | `name`, `dose`, `start_date`, `prescriber`, `pharmacy`, `last_fill`, `refills_remaining` |
 | `list_lab_results` | Lab panels with values (supports filters: `test_name`, `date_from`, `date_to`) | `test_name`, `value`, `units`, `ref_range`, `abnormal_flag`, `date` |
+| `list_upcoming_orders` | Pending labs / imaging / procedures the doctor placed but the patient hasn't completed yet (the placed-but-not-yet-resulted half of the lab lifecycle) | `order_id`, `order_type`, `placed_date`, `placing_provider`, `prep_summary`, `expiration_date` |
+| `read_upcoming_order_instructions` | Full patient prep instructions for one pending order | `instructions_text`, `instructions_html`, `prep_requirements`, `location` |
 | `list_allergies` | Known allergies + reactions | `substance`, `reaction`, `severity`, `onset_date` |
 | `list_problems` | Active problem list | `name`, `icd10`, `onset_date`, `status`, `managing_provider` |
 | `list_procedures` | Surgical and procedural history | `name`, `date`, `performing_provider`, `location`, `cpt` |
