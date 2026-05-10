@@ -1,6 +1,6 @@
 # OpenKP
 
-[![CI](https://github.com/testuser/OpenKP/actions/workflows/ci.yml/badge.svg)](https://github.com/testuser/OpenKP/actions/workflows/ci.yml)
+[![CI](https://github.com/hugooc/OpenKP/actions/workflows/ci.yml/badge.svg)](https://github.com/hugooc/OpenKP/actions/workflows/ci.yml)
 
 A patient-directed MCP server that lets Claude read and act on your Kaiser Permanente medical record using your own credentials, on your own Mac.
 

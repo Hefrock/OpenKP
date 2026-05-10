@@ -1,6 +1,6 @@
 # v1 public-release checklist
 
-Required steps before flipping `github.com/testuser/OpenKP` from private to public. Status as of 2026-05-04.
+Required steps before flipping `github.com/hugooc/OpenKP` from private to public. Status as of 2026-05-04.
 
 ## 1. README polish (done 2026-05-04)
 
