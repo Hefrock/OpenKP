@@ -45,3 +45,6 @@ reference/
 
 # Local launcher (Hugo-specific)
 Launch OpenKP.command
+
+# Wrangler (Cloudflare Pages CLI) local cache and state
+.wrangler/

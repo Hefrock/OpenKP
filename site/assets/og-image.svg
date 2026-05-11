@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="OpenKP social preview">
+  <rect width="1200" height="630" fill="#f8f4eb"/>
+  <rect x="58" y="56" width="1084" height="518" fill="#fffdf8" stroke="#181512" stroke-width="3"/>
+  <rect x="58" y="56" width="1084" height="86" fill="#181512"/>
+  <circle cx="101" cy="99" r="13" fill="#9f3f2f"/>
+  <circle cx="141" cy="99" r="13" fill="#c6923e"/>
+  <circle cx="181" cy="99" r="13" fill="#255d3f"/>
+  <text x="227" y="112" fill="#f8f4eb" font-family="Arial, sans-serif" font-size="27" font-weight="700">openkp.org</text>
+
+  <g transform="translate(86 184)">
+    <rect width="132" height="132" fill="#181512"/>
+    <rect x="18" y="18" width="96" height="96" fill="#f8f4eb" stroke="#c6923e" stroke-width="6"/>
+    <path d="M40 66c0-17 11-28 28-28s28 11 28 28-11 28-28 28-28-11-28-28Z" fill="none" stroke="#255d3f" stroke-width="10"/>
+    <path d="M70 36v60M94 66H68L50 90" fill="none" stroke="#9f3f2f" stroke-width="10" stroke-linecap="square" stroke-linejoin="miter"/>
+  </g>
+
+  <text x="254" y="229" fill="#9f3f2f" font-family="Arial, sans-serif" font-size="25" font-weight="800" letter-spacing="0">KAISER PERMANENTE NORTHERN CALIFORNIA ONLY</text>
+  <text x="254" y="309" fill="#181512" font-family="Arial, sans-serif" font-size="74" font-weight="850" letter-spacing="0">OpenKP</text>
+  <text x="254" y="381" fill="#181512" font-family="Arial, sans-serif" font-size="48" font-weight="760" letter-spacing="0">Your patient portal, directed by you.</text>
+  <text x="254" y="452" fill="#655f55" font-family="Arial, sans-serif" font-size="31" font-weight="520">A local MCP bridge between your AI assistant and kp.org,</text>
+  <text x="254" y="495" fill="#655f55" font-family="Arial, sans-serif" font-size="31" font-weight="520">using your own credentials, on your own Mac.</text>
+
+  <rect x="86" y="522" width="270" height="1" fill="#181512"/>
+  <text x="380" y="532" fill="#255d3f" font-family="Arial, sans-serif" font-size="24" font-weight="800">LOCAL-FIRST</text>
+  <text x="550" y="532" fill="#9f3f2f" font-family="Arial, sans-serif" font-size="24" font-weight="800">PATIENT-DIRECTED</text>
+  <text x="795" y="532" fill="#c6923e" font-family="Arial, sans-serif" font-size="24" font-weight="800">OPEN SOURCE</text>
+</svg>

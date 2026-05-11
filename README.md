@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/hugooc/OpenKP/actions/workflows/ci.yml/badge.svg)](https://github.com/hugooc/OpenKP/actions/workflows/ci.yml)
 
+Website: [openkp.org](https://openkp.org)
+
 A patient-directed MCP server that bridges Claude and **Kaiser Permanente Northern California's** patient portal — letting you act on your own medical record, with your own credentials, on your own Mac.
 
 ```

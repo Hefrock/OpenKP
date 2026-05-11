@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OpenKP | Patient-directed AI for Kaiser Permanente NorCal records</title>
+    <meta
+      name="description"
+      content="OpenKP is a local MCP server that lets an MCP-capable AI assistant work with your Kaiser Permanente Northern California patient portal using your own credentials, on your own Mac."
+    >
+    <meta property="og:title" content="OpenKP">
+    <meta
+      property="og:description"
+      content="A patient-directed MCP bridge between your AI assistant and Kaiser Permanente Northern California's patient portal."
+    >
+    <meta property="og:image" content="https://openkp.org/assets/og-image.png">
+    <meta property="og:image:secure_url" content="https://openkp.org/assets/og-image.png">
+    <meta property="og:image:type" content="image/png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://openkp.org">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://openkp.org/assets/og-image.png">
+    <meta name="theme-color" content="#f6f3ea">
+    <link rel="canonical" href="https://openkp.org/">
+    <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="site-header" data-elevate>
+      <a class="brand" href="#top" aria-label="OpenKP home">
+        <span class="brand-mark">OKP</span>
+        <span>OpenKP</span>
+      </a>
+      <nav class="nav" aria-label="Primary navigation">
+        <a href="#why">Why</a>
+        <a href="#tools">Tools</a>
+        <a href="#install">Install</a>
+        <a href="#limits">Limits</a>
+      </nav>
+      <a class="header-cta" href="https://github.com/hugooc/OpenKP">GitHub</a>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Kaiser Permanente Northern California only</p>
+          <h1>Your patient portal, directed by you.</h1>
+          <p class="lede">
+            OpenKP is a local MCP server that lets your AI assistant read and act
+            on your Kaiser Permanente record using your own credentials, on your own Mac.
+          </p>
+          <div class="hero-actions" aria-label="Primary calls to action">
+            <a class="button primary" href="https://github.com/hugooc/OpenKP">View on GitHub</a>
+            <a class="button secondary" href="#install">Install path</a>
+          </div>
+        </div>
+
+        <div class="hero-panel" aria-label="OpenKP example">
+          <div class="panel-toolbar">
+            <span></span><span></span><span></span>
+            <strong>Claude Desktop</strong>
+          </div>
+          <div class="chat-window">
+            <div class="bubble user">
+              Read every visit note from the last two years. Where did I raise concerns,
+              ask questions, or push back? How was that documented?
+            </div>
+            <div class="tool-call">
+              <span class="status-dot"></span>
+              openkp.list_past_visits &rarr; openkp.read_visit_notes
+            </div>
+            <div class="bubble assistant">
+              I found repeated concern-raising across cardiology visits and message
+              threads. Here are the patterns in how your engagement appears in the chart...
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="intro-band" id="why">
+        <div class="section-kicker">Why it exists</div>
+        <div class="split">
+          <h2>Kaiser shows the record. OpenKP helps you interrogate it.</h2>
+          <div class="prose">
+            <p>
+              Patient portals are built as filing cabinets. They show results, notes,
+              messages, plans, and orders in separate drawers. OpenKP gives a patient
+              an agentic interface over those same portal surfaces.
+            </p>
+            <p>
+              The framing is critical AI health literacy: patient-directed AI on data
+              patients have a right to access, surfacing what institutional systems
+              aren't built to make legible.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="trust-section">
+        <div class="section-kicker">Trust boundary</div>
+        <h2>Local-first by design.</h2>
+        <div class="trust-diagram" aria-label="OpenKP local-first architecture">
+          <div class="node person">
+            <span>You</span>
+            <small>plain-language questions</small>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node claude">
+            <span>MCP client</span>
+            <small>Claude Desktop, Claude Code, Cursor, Zed, ...</small>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node openkp">
+            <span>OpenKP</span>
+            <small>local Python subprocess</small>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node kaiser">
+            <span>kp.org</span>
+            <small>your web session</small>
+          </div>
+        </div>
+        <div class="principles">
+          <article>
+            <h3>No OpenKP server</h3>
+            <p>There isn't a hosted OpenKP service, shared database, or remote credential store.</p>
+          </article>
+          <article>
+            <h3>Your credentials</h3>
+            <p>Credentials live in your OS keychain or local environment, never in the repo.</p>
+          </article>
+          <article>
+            <h3>Explicit writes</h3>
+            <p>Write tools preview first and only commit when called with explicit confirmation.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="questions-section">
+        <div class="section-kicker">What it makes possible</div>
+          <h2>Questions a portal isn't designed to answer.</h2>
+        <div class="question-grid">
+          <blockquote>Which lab values have drifted in the last 18 months?</blockquote>
+          <blockquote>How many appointments did I have last year, split by virtual vs in-person?</blockquote>
+          <blockquote>Compare what my cardiologist and primary-care doctor each wrote over time.</blockquote>
+          <blockquote>Are there diagnoses on my problem list I don't recognize?</blockquote>
+        </div>
+      </section>
+
+      <section class="tools-section" id="tools">
+        <div class="section-kicker">Tool surface</div>
+        <div class="tools-header">
+          <h2>22 MCP tools, focused on real patient workflows.</h2>
+          <p>
+            Three housekeeping tools, seventeen read tools, and two write tools.
+            Read paths are broadly live-verified. Write commit paths are still treated carefully.
+          </p>
+        </div>
+        <div class="tool-columns">
+          <div class="tool-list">
+            <h3>Read</h3>
+            <ul>
+              <li>Profile, insurance, PCP, emergency contacts</li>
+              <li>Messages, message attachments, archival search</li>
+              <li>Lab results, imaging, PDFs, narratives</li>
+              <li>Medications, refill status, order tracking</li>
+              <li>Problems, allergies, appointments, past visits</li>
+              <li>Visit notes and after-visit summaries</li>
+            </ul>
+          </div>
+          <div class="tool-list">
+            <h3>Write</h3>
+            <ul>
+              <li>Preview and request a mail-order refill</li>
+              <li>Preview and send a non-urgent care-team message</li>
+              <li>Audit log records commit-path activity locally</li>
+              <li>Dry-run mode for smoke testing write flows</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="install-section" id="install">
+        <div class="install-copy">
+          <div class="section-kicker">Install path</div>
+          <h2>Built for technically curious KP NorCal members.</h2>
+          <p>
+            OpenKP is an MCP server. MCP, the Model Context Protocol, is an open
+            standard for connecting AI clients to tools and data. At runtime, any
+            MCP-capable client should be able to call OpenKP tools.
+          </p>
+          <p>
+            Claude Desktop and Claude Code are the tested clients today. Claude Code
+            is also the recommended install assistant: open the cloned directory
+            with Claude Code and ask it to walk you through the rest.
+          </p>
+        </div>
+        <div class="install-card">
+          <div class="command-block">
+            <code>git clone https://github.com/hugooc/OpenKP.git</code>
+          </div>
+          <p>
+            Setup still goes through a Python virtual environment, OS keychain
+            credential storage, an MCP config block, and a one-time interactive
+            Chromium login.
+          </p>
+          <p>
+            Runtime client: whichever MCP-capable assistant you prefer. Install
+            assistant: Claude Code is the clearest path for non-developers who are
+            comfortable following terminal instructions.
+          </p>
+        </div>
+      </section>
+
+      <section class="limits-section" id="limits">
+        <div class="section-kicker">Limits</div>
+        <h2>OpenKP is a research tool, not a clinical product.</h2>
+        <div class="limits-grid">
+          <article>
+            <h3>NorCal only</h3>
+            <p>Kaiser regions differ. OpenKP is tested only against Kaiser Permanente Northern California.</p>
+          </article>
+          <article>
+            <h3>Terms risk</h3>
+            <p>Automated portal access may conflict with Kaiser's terms of use. Read the terms and judge for yourself.</p>
+          </article>
+          <article>
+            <h3>Your assistant sees tool results</h3>
+            <p>OpenKP is local, but your MCP client needs parsed record content to reason about your questions.</p>
+          </article>
+          <article>
+            <h3>Endpoints can change</h3>
+            <p>OpenKP depends on portal request shapes. It fails loudly when Kaiser changes them.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="final-cta">
+        <h2>Own the interface to your own record.</h2>
+        <p>Open source. MIT licensed. Local-first. Built for patients who want to inspect, adapt, and direct their tools.</p>
+        <a class="button primary" href="https://github.com/hugooc/OpenKP">Get OpenKP on GitHub</a>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div>
+        <strong>OpenKP</strong>
+        <p>Patient-directed AI for Kaiser Permanente Northern California records.</p>
+      </div>
+      <nav aria-label="Footer navigation">
+        <a href="https://github.com/hugooc/OpenKP">GitHub</a>
+        <a href="https://nam.edu/perspectives/critical-ai-health-literacy-as-liberation-technology-a-new-skill-for-patient-empowerment">CAIHL</a>
+        <a href="https://aipatients.org">AI Patients</a>
+      </nav>
+    </footer>
+
+    <script src="./script.js"></script>
+  </body>
+</html>
