@@ -1,6 +1,6 @@
-# v1 public-release checklist
+# v1 public-release checklist — closed 2026-05-11
 
-Required steps before flipping `github.com/hugooc/OpenKP` from private to public. Status as of 2026-05-11.
+Historical record of the steps taken to flip OpenKP from private development to a public repo at `github.com/hugooc/OpenKP`. All hard blockers closed. The remaining items are post-launch cleanups (item 6).
 
 ## 1. README polish — done 2026-05-04
 
@@ -10,59 +10,32 @@ What's still rough:
 - The "First authenticated run" step (4 in the inner README) describes piping stdio MCP requests as a fallback. In practice everyone goes straight to step 5 (Claude Desktop). Could simplify.
 - Linux install path is untested. The README says "macOS (tested) or Linux (untested)" — first Linux user will surface anything that breaks.
 
-## 2. PHI history rewrite — local rewrite DONE 2026-05-10, force-push pending
+## 2. PHI history rewrite + public release — done 2026-05-11
 
-**Local state:** git history rewritten via `git filter-repo`. HEAD `57ede8e`. All commits scrubbed of PHI in blob content and commit messages. `docs/recon/` removed from history via `--invert-paths`. 28 commits total. 527 tests still pass. See `private/documentation/recon/session-19.md` for the full operational record.
+**Rewrite (local) done 2026-05-10** via `git filter-repo`. Post-rewrite HEAD `57ede8e`. All commits scrubbed of PHI in blob content and commit messages. `docs/recon/` removed from history via `--invert-paths`. 28 commits total at rewrite time, 527 tests still pass. Full operational record in `private/documentation/recon/session-19.md`.
 
-**Author metadata kept by deliberate choice** — `Hugo Campos <2074396+hugooc@users.noreply.github.com>` remains on every commit. Rewriting author/committer would have required `--name-callback` / `--email-callback`, which we explicitly opted out of so the project stays attributed to Hugo as the public author.
+**Public release via fresh-repo strategy** rather than the originally planned force-push + GC sequence. On 2026-05-11:
+
+1. A new public repo `hugooc/OpenKP` was created.
+2. The rewritten history was pushed to the new public repo as its initial state.
+3. The old private working repo (whatever its name was) was set aside. The historical private archive at `hugooc/OpenKP-private-archive` retains a 2026-04-25 snapshot of the early original PHI-bearing history (25 commits — only the first phase of development).
+
+**Why this beat the force-push route:** the public repo never contained the PHI commits to begin with, so there's nothing for GitHub GC of unreferenced refs to clean up. No support ticket required. No 1-3 business day wait. No risk of direct-SHA URLs leaking PHI for 90 days. The original force-push plan (documented in earlier versions of this file) assumed flipping the existing private repo to public; the fresh-repo path sidesteps the whole GC problem.
+
+**Author metadata kept by deliberate choice** — `Hugo Campos <2074396+hugooc@users.noreply.github.com>` remains on every commit in the rewritten history. Rewriting author/committer would have required `--name-callback` / `--email-callback`, explicitly opted out of so the project stays attributed to Hugo as the public author.
 
 **Two accepted residuals in the rewritten history:**
 - `Hugo Campos` in commit attribution and the occasional Co-Authored-By trailer.
-- `https://github.com/hugooc/OpenKP` URL references in HEAD's README badge and this checklist (a `Restore github.com/hugooc URLs` fixup commit reverted the URL after the substring rule overzealously rewrote it).
+- `https://github.com/hugooc/OpenKP` URL references in HEAD's README badge and this checklist.
 
 Both are explicitly accepted public identifiers.
 
-**Heads up — LICENSE and prose attribution:** the `Hugo Campos==>Test Patient` blob rule also rewrote `openkp/LICENSE`'s copyright line and one mention in this file (originally "2026 Hugo Campos copyright line", now "2026 Test Patient"). If you want your name restored in those non-PHI public attribution spots before the flip, do it as a small commit on top — same pattern as the URL fixup commit. The blob rule is gone, so any new mentions of "Hugo Campos" in commits going forward will not be touched.
+**LICENSE and prose attribution:** the `Hugo Campos==>Test Patient` blob rule rewrote `openkp/LICENSE`'s copyright line and one mention in this file (now "2026 Test Patient" in both spots). If you want your name restored as the public copyright holder, do it as a small commit on top. The blob rule is gone, so new mentions of "Hugo Campos" going forward won't be touched.
 
-**Mirror backup:** `/tmp/openkp-backup-pre-rewrite/` (2.3 MB bare clone of the repo state immediately before the rewrite). Self-cleans on reboot. Keep until GitHub GC is confirmed.
-
-### What still needs to happen (in order):
-
-```bash
-# Step 1 — push the rewritten history to the (still-private) GitHub repo
-git push --force-with-lease origin main
-```
-
-**Push does NOT make the repo public.** It only updates the content of the existing private repo. Visibility is a separate Settings toggle on github.com.
-
-```bash
-# Step 2 — file a GitHub support ticket
-```
-
-Open a ticket at https://support.github.com asking them to GC unreferenced refs. Without this, the original PHI-bearing commits remain accessible via direct SHA URLs for ~90 days even though they're not reachable from any branch. GitHub support's standard turnaround is 1-3 business days.
-
-Suggested ticket text:
-
-> I just force-pushed a rewritten history to github.com/hugooc/OpenKP (private) using git-filter-repo to remove sensitive personal data from older commits. The original commits still appear to be retrievable via direct SHA URLs. Could you please run garbage collection on the repository so the unreferenced commits become inaccessible? Thanks.
-
-```bash
-# Step 3 — verify GC complete (after GitHub support confirms)
-# Pick a known pre-rewrite SHA (any commit hash from `git -C /tmp/openkp-backup-pre-rewrite log --oneline`)
-git fetch origin <old-pre-rewrite-sha>   # should fail with "Could not find" or similar
-```
-
-```bash
-# Step 4 — final pre-flip audit
-git log -p | grep -iE "<known PHI patterns>"   # should return empty
-git ls-files | xargs grep -l "<known PHI patterns>"   # should return empty
-# Walk the README install steps from a fresh clone in a clean directory
-```
-
-### Step 5 — flip to public
-
-GitHub web UI → Settings → "Danger Zone" → "Change repository visibility" → Public. Type the repo name to confirm.
-
-**This is the actual irreversible reputation moment.** Do it deliberately, with the audit fresh.
+**Mirror backups (informational):**
+- `/tmp/openkp-backup-pre-rewrite/` was the local mirror at rewrite time. Self-cleans on reboot; likely already gone.
+- `hugooc/OpenKP-private-archive` on GitHub holds the 2026-04-25 partial snapshot. Persistent. Private.
+- The complete pre-rewrite history (28 commits including the late-phase PHI) exists only in whatever local clones you happen to have. If the `/tmp` backup is gone and no other clones exist, that history is unrecoverable. The rewritten version is the authoritative version going forward.
 
 ## 3. PHI outside the repo (informational, not a publication concern)
 
@@ -88,14 +61,17 @@ Deploy command (run from repo root):
 wrangler pages deploy site --project-name=openkp --branch=main --commit-dirty=true
 ```
 
-Today the deploy is direct-upload (wrangler from local). After the PHI force-push and flip-public land, switch the Pages project to auto-deploy from GitHub (`Settings → Builds & deployments → Connect to Git`) so site edits ship on push. Until then, redeploy via wrangler each time `site/` changes.
+Today the deploy is direct-upload (wrangler from local). Now that the public repo is live, the Pages project can be switched to GitHub auto-deploy any time via the Cloudflare dashboard (`Settings → Builds & deployments → Connect to Git`) so site edits ship on push. Until then, redeploy via wrangler each time `site/` changes.
 
 Custom domains active: `openkp.org` and `www.openkp.org`, both proxied through Cloudflare with auto-SSL. See session-20 for the operational record.
 
-## 6. Cleanup after flip-public
+## 6. Post-launch cleanups
 
-Once the repo is public and you've verified everything is in order:
+The public repo is live. The following are housekeeping items, none blocking:
 
-- `rm -rf /tmp/openkp-backup-pre-rewrite` (or just reboot — it self-cleans).
-- `rm private/rewrite/replacements*.txt private/rewrite/candidates.txt` — these contain real LHS values. The Python/shell scripts and `phi-audit.txt` (counts only) can stay as historical reference if you want.
-- `private/documentation/` — your call. Most of it (genesis, sample-questions, screenshots) you'll likely keep forever for personal reference.
+- `/tmp/openkp-backup-pre-rewrite/` — self-cleans on reboot; nothing to do.
+- `private/rewrite/replacements*.txt` and `private/rewrite/candidates.txt` contain real LHS values from the rewrite. Safe to delete now. The Python/shell scripts and `phi-audit.txt` (counts only) can stay as historical reference if you want.
+- `private/documentation/` — your call. Most of it (genesis, sample-questions, screenshots, recon journals) you'll likely keep forever for personal reference.
+- **Pages → GitHub auto-deploy:** optional swap from wrangler direct-upload to Git-connected auto-deploy. See item 5.
+- **LICENSE + release-checklist attribution:** optional fixup commit to restore "Hugo Campos" as the copyright holder in `openkp/LICENSE` and the one mention in this file (currently both say "Test Patient" due to the PHI-rewrite blob rule). See item 2.
+- **`hugooc/OpenKP-private-archive`:** the partial 2026-04-25 snapshot can be deleted or archived at your discretion. It is not load-bearing for the public repo.

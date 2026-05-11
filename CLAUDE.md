@@ -44,24 +44,19 @@ See `DESIGN.md` §1 (audience), §5 (Phase 4 / 4.5), §10 (distribution strategy
 
 **CI:** GitHub Actions runs ruff + mypy + pytest on push/PR (Python 3.11/3.12/3.13). See `.github/workflows/ci.yml`. Status badge in root README.
 
-**PHI history rewrite:** done locally 2026-05-10 (HEAD `57ede8e`, see session-19). All commits scrubbed of PHI in blobs and messages; `docs/recon/` removed from history. Force-push to origin + GitHub support ticket for ref GC + flip-public are still pending. Mirror backup at `/tmp/openkp-backup-pre-rewrite` self-cleans on reboot — preserve until GC confirmed if you reboot before completing the flip.
+**PHI history rewrite + public release:** rewrite done locally 2026-05-10 (HEAD `57ede8e` post-rewrite, see session-19). All commits scrubbed of PHI in blobs and messages. `docs/recon/` removed from history. **Public release used a fresh-repo strategy** rather than the force-push + GC route originally planned: `hugooc/OpenKP` was created fresh as a public repo on 2026-05-11 and the rewritten history was pushed there as its initial state. No PHI commits ever existed on the public repo, so the GitHub-GC-of-unreferenced-refs step is moot. The original pre-rewrite history lives privately at `hugooc/OpenKP-private-archive` (partial snapshot from 2026-04-25, 25 commits — only the early phase of development). The complete pre-rewrite mirror was `/tmp/openkp-backup-pre-rewrite/` and self-cleans on reboot; if you've rebooted, it's gone.
 
-**Website:** [openkp.org](https://openkp.org) live on Cloudflare Pages as of 2026-05-11 (commit `25a7259`, see session-20). Source under `site/` — static single-page, no build step, no framework. CAIHL framing in copy, MCP-client-agnostic at runtime. Codex drafted, two review passes, then deployed via wrangler direct upload. Future deploys from repo root: `wrangler pages deploy site --project-name=openkp --branch=main --commit-dirty=true`. Switch to GitHub auto-deploy after the PHI force-push lands.
+**Website:** [openkp.org](https://openkp.org) live on Cloudflare Pages as of 2026-05-11 (commit `25a7259`, see session-20). Source under `site/` — static single-page, no build step, no framework. CAIHL framing in copy, MCP-client-agnostic at runtime. Codex drafted, two review passes, then deployed via wrangler direct upload. Future deploys from repo root: `wrangler pages deploy site --project-name=openkp --branch=main --commit-dirty=true`. Public repo is live, so you can also switch the Pages project to GitHub auto-deploy any time via the Cloudflare dashboard — no longer gated on anything.
 
 ## Next session: start here
 
+Public release is done. Open code work is below.
+
 **Top candidates, in rough priority order:**
 
-1. **Force-push the rewritten history + flip repo public** — local rewrite is done; only the remote/admin steps remain. Sequence:
-   - `git push --force-with-lease origin main` (push only updates the **private** repo's content; does NOT make it public).
-   - File a GitHub support ticket asking them to GC unreferenced refs (1-3 business-day turnaround). Without this, the original PHI-bearing commits remain accessible via direct SHA URLs for ~90 days.
-   - After GC confirmation, run final audit: fresh `git log -p | grep` for known PHI patterns, walk install steps from a clean directory.
-   - **Then** Settings → "Change repository visibility" → Public. This is the actual flip moment — separate, deliberate, irreversible-in-reputation.
-   - Full sequence + push-vs-public distinction documented in `docs/release-checklist.md`.
+1. **`reply_to_message(thread_id, body)`** — natural sibling to `send_message`. Needs a fresh HAR capture (the "Reply" button on an opened thread almost certainly hits a different endpoint than compose). Lower-risk than `send_message` because we're not picking a recipient — the thread already names one.
 
-2. **`reply_to_message(thread_id, body)`** — natural sibling to `send_message`. Needs a fresh HAR capture (the "Reply" button on an opened thread almost certainly hits a different endpoint than compose). Lower-risk than `send_message` because we're not picking a recipient — the thread already names one.
-
-3. **`send_message` polish from session 14 review:**
+2. **`send_message` polish from session 14 review:**
    - **PCP role label fallback:** the PCP recipient row's `role` came back null because `specialty` and `pcpTypeDisplayName` were empty strings. Derive `"Primary Care"` from `recipientType == 1` so the UI/caller has something to display.
    - **OOC awareness:** the recipient catalog carries `oocDateISO` and `oocContextString` for providers who are out of office. Surface those as fields on `MessageRecipient` so the preview can flag "your provider is out of office until X" before the user commits.
    - **`body_preview` rename or cap:** today's field name suggests truncation but the implementation only truncates above 200 chars. Either rename to `body` (full echo always) or always cap with `...` suffix when longer.
@@ -105,8 +100,8 @@ header capture.
 ## Read these first
 
 - `DESIGN.md` — vision, principles, architecture, roadmap, tool inventory, safety patterns. Single source of truth.
-- `docs/release-checklist.md` — pre-public-release todos. Items 1 (README) and 4 (LICENSE) done; item 2 (history rewrite) is the only remaining hard blocker.
-- **Recon journals live in the gitignored sidecar** at `private/documentation/recon/` (consolidated 2026-05-10 from `~/Desktop/OpenKP Documentation/`; the whole `private/` tree is gitignored). The last few are the most relevant context: session-19 (Codex audit + release hygiene + PHI rewrite + sidecar consolidation, 2026-05-10), session-18 (click-around recon, 2026-05-06), session-17 (PHI scrub + READMEs), session-16 (visit notes + AVS), session-15 (appointments + page_size).
+- `docs/release-checklist.md` — pre-public-release todos. All hard blockers now closed: README, LICENSE, PHI history rewrite (via fresh-repo strategy), and website are all done. Repo is public at github.com/hugooc/OpenKP.
+- **Recon journals live in the gitignored sidecar** at `private/documentation/recon/` (consolidated 2026-05-10 from `~/Desktop/OpenKP Documentation/`; the whole `private/` tree is gitignored). The last few are the most relevant context: session-20 (openkp.org site review + deploy + custom domain + repo-state reconciliation, 2026-05-11), session-19 (Codex audit + release hygiene + PHI rewrite + sidecar consolidation, 2026-05-10), session-18 (click-around recon, 2026-05-06), session-17 (PHI scrub + READMEs), session-16 (visit notes + AVS).
 - `docs/adr/README.md` — architectural decisions index. ADRs 001-006 live here.
 - `docs/research/endpoints/` — per-endpoint request/response maps. Start with `profile.md`.
 
