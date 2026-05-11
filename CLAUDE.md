@@ -42,11 +42,20 @@ See `DESIGN.md` §1 (audience), §5 (Phase 4 / 4.5), §10 (distribution strategy
 
 **Tests:** 527 passing. Run with `.venv/bin/pytest -q` from `openkp/`.
 
+**CI:** GitHub Actions runs ruff + mypy + pytest on push/PR (Python 3.11/3.12/3.13). See `.github/workflows/ci.yml`. Status badge in root README.
+
+**PHI history rewrite:** done locally 2026-05-10 (HEAD `57ede8e`, see session-19). All commits scrubbed of PHI in blobs and messages; `docs/recon/` removed from history. Force-push to origin + GitHub support ticket for ref GC + flip-public are still pending. Mirror backup at `/tmp/openkp-backup-pre-rewrite` self-cleans on reboot — preserve until GC confirmed if you reboot before completing the flip.
+
 ## Next session: start here
 
 **Top candidates, in rough priority order:**
 
-1. **Git history rewrite + flip repo public** — the **only remaining v1 release blocker.** Working state is PHI-clean (session 17 scrub); old commits still hold the original DOB/GUID/MRN/ZIP/provider names/recon journals in their blobs. Steps documented in `docs/release-checklist.md`. Best done as one focused chunk: `git filter-repo` with the replacement table → force-push → file a GitHub support ticket asking them to GC unreferenced refs (1-3 business-day turnaround) → final pre-flip audit (fresh `git log -p | grep`, walk install steps from a clean directory) → flip repo public. **~3-4 hours of focused work, mostly waiting.**
+1. **Force-push the rewritten history + flip repo public** — local rewrite is done; only the remote/admin steps remain. Sequence:
+   - `git push --force-with-lease origin main` (push only updates the **private** repo's content; does NOT make it public).
+   - File a GitHub support ticket asking them to GC unreferenced refs (1-3 business-day turnaround). Without this, the original PHI-bearing commits remain accessible via direct SHA URLs for ~90 days.
+   - After GC confirmation, run final audit: fresh `git log -p | grep` for known PHI patterns, walk install steps from a clean directory.
+   - **Then** Settings → "Change repository visibility" → Public. This is the actual flip moment — separate, deliberate, irreversible-in-reputation.
+   - Full sequence + push-vs-public distinction documented in `docs/release-checklist.md`.
 
 2. **`reply_to_message(thread_id, body)`** — natural sibling to `send_message`. Needs a fresh HAR capture (the "Reply" button on an opened thread almost certainly hits a different endpoint than compose). Lower-risk than `send_message` because we're not picking a recipient — the thread already names one.
 
@@ -56,7 +65,7 @@ See `DESIGN.md` §1 (audience), §5 (Phase 4 / 4.5), §10 (distribution strategy
    - **`body_preview` rename or cap:** today's field name suggests truncation but the implementation only truncates above 200 chars. Either rename to `body` (full echo always) or always cap with `...` suffix when longer.
 
 **Loose ends (optional, not blocking):**
-- **`read_visit_notes` `iso` field is inconsistent.** Clinical notes return real ISO-8601 (`"2025-12-04T13:36:47-08:00"` from `noteList[i].iso`); the synthetic `after_visit_summary` `iso` carries Kaiser's display string (`"Dec 04, 2025"` from `visitSummaryInfo.encounterDate`). Field name promises ISO but only delivers half the time. Either rename to `date_display` or parse the encounter date into real ISO before returning.
+- ~~**`read_visit_notes` `iso` field is inconsistent.**~~ **Fixed 2026-05-10 (session 19).** AVS branch now parses the encounter-date display string ("Dec 04, 2025") to date-only ISO ("2025-12-04") via `_display_date_to_iso`. Clinical notes still carry full timestamp from `noteList[i].iso`. Field doc updated to spell out the two precision levels. Test pinned: `tests/test_visit_notes.py` asserts `avs.iso == "2025-01-01"` for the fixture.
 - **Live-verify the `is_telemedicine` heuristic on `list_appointments` / `list_past_visits`.** Recon had zero virtual visits, so the heuristic (Telemedicine OR EVisit OR CanShowTelemedicine) is inferential. Cowork-Claude bypassed it by reading `visit_type` directly ("Telephone", "Video Visit"), but next time Hugo's calendar has a video or phone visit, peek at the dump to see whether the heuristic actually fires.
 - **Capture a filter-applied appointments HAR** to learn how `LoadPast` accepts a provider/specialty filter ID. The filter UI HAR (session 15) only loaded the dropdown options; we never saw a filter actually applied. Unblocks `list_past_visits(provider="...")`-style queries.
 - **Live-verify the `send_message` commit path** next time you actually need to message a provider. Today only the preview path was hit live; the GetComposeId / SaveDraft / Send chain is theoretical-correct + unit-tested but not yet exercised against Kaiser. Tail `~/.openkp/audit.log` from the dev session before you fire `confirm=True` so events stream live.
@@ -95,7 +104,7 @@ header capture.
 
 - `DESIGN.md` — vision, principles, architecture, roadmap, tool inventory, safety patterns. Single source of truth.
 - `docs/release-checklist.md` — pre-public-release todos. Items 1 (README) and 4 (LICENSE) done; item 2 (history rewrite) is the only remaining hard blocker.
-- **Recon journals live in the gitignored sidecar** at `private/documentation/recon/` (consolidated 2026-05-10 from `~/Desktop/OpenKP Documentation/`; the whole `private/` tree is gitignored). The last few are the most relevant context: session-17 (PHI scrub + READMEs), session-16 (visit notes + AVS), session-15 (appointments + page_size), session-14 (send_message), session-13 (track_refill_order).
+- **Recon journals live in the gitignored sidecar** at `private/documentation/recon/` (consolidated 2026-05-10 from `~/Desktop/OpenKP Documentation/`; the whole `private/` tree is gitignored). The last few are the most relevant context: session-19 (Codex audit + release hygiene + PHI rewrite + sidecar consolidation, 2026-05-10), session-18 (click-around recon, 2026-05-06), session-17 (PHI scrub + READMEs), session-16 (visit notes + AVS), session-15 (appointments + page_size).
 - `docs/adr/README.md` — architectural decisions index. ADRs 001-006 live here.
 - `docs/research/endpoints/` — per-endpoint request/response maps. Start with `profile.md`.
 
