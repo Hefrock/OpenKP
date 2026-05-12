@@ -2,7 +2,7 @@
 name = "openkp"
 version = "0.1.0"
 description = "A patient-directed MCP server that bridges Claude and Kaiser Permanente's patient portal."
-authors = [{name = "Test Patient"}]
+authors = [{name = "Hugo Campos"}]
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}

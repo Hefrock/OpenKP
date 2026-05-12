@@ -23,7 +23,7 @@ Use this when you reverse-engineer a new Kaiser endpoint:
 # Endpoint: list_medications
 
 **Captured on:** 2026-04-23
-**By:** Test Patient
+**By:** Hugo Campos
 **Kaiser region:** NorCal
 
 ## Request

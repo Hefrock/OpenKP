@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-22
 **Status:** Active
-**Authors:** Test Patient
+**Authors:** Hugo Campos
 
 ## Context
 

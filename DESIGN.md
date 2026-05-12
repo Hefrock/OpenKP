@@ -2,7 +2,7 @@
 
 **Version:** 0.1 (living document)
 **Last updated:** April 24, 2026
-**Author:** Test Patient
+**Author:** Hugo Campos
 
 ---
 
@@ -555,7 +555,7 @@ Open Record, by Ryan Hughes at Fan Pier Labs, is the prior art and conceptual so
 
 **Theoretical foundation:**
 - The Critical AI Health Literacy (CAIHL) framework, drawing on Freirean critical pedagogy applied to patient-AI relationships
-- Test Patient's prior advocacy work on patient data rights
+- Hugo Campos's prior advocacy work on patient data rights
 
 **Technical references:**
 - Model Context Protocol specification
