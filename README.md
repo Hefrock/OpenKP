@@ -18,11 +18,13 @@ Kaiser's portal shows you plans, orders, and results. It doesn't show you how *y
 
 This is **critical AI health literacy** in practice — patient-directed AI on patient-owned data, surfacing what institutional systems are not built to make legible. Background: ["Critical AI Health Literacy as Liberation Technology"](https://nam.edu/perspectives/critical-ai-health-literacy-as-liberation-technology-a-new-skill-for-patient-empowerment) (NAM Perspectives) and [aipatients.org](https://aipatients.org).
 
-OpenKP exposes 19 read tools and 2 write tools covering appointments, labs, messages, medications, problems, allergies, demographics, visit notes, after-visit summaries, care team and recent providers, and implanted devices. Other questions it can handle:
+OpenKP exposes 22 read tools and 2 write tools covering appointments, labs, messages, medications, problems, allergies, demographics, visit notes, after-visit summaries, care team and recent providers, implanted devices, access logs, and upcoming orders. Other questions it can handle:
 
 - *"How many appointments did I have last year, split by virtual vs in-person?"*
 - *"Which lab values have drifted in the last 18 months?"*
 - *"Compare what my cardiologist and primary-care doctor have each written about my condition over the last three years."*
+- *"Which third-party apps accessed my Kaiser record, what did they read, and when?"*
+- *"What tests or procedures has my doctor ordered that I still need to complete?"*
 - *"Refill my blood pressure medication."*
 
 Everything stays on your machine. There is no OpenKP server, no shared database, no remote credential store. Every Kaiser request is made by you, as you, using the same web session you'd get logging into kp.org by hand.
@@ -75,7 +77,7 @@ The full list lives in `DESIGN.md` §2. The three that matter most:
 
 ## Status
 
-Phase 2 (read-only) is closed. Phase 3 (writes) is in progress. As of 2026-05-26: 24 MCP tools registered, 567 tests passing on macOS, run with `cd openkp && .venv/bin/pytest -q`. Per-tool status (live-verified, preview-only, deferred) is documented in `openkp/README.md`. Windows is supported with the caveats in [`docs/install/windows.md`](docs/install/windows.md) — all but 4 platform-specific tests pass, and none of the failures affect any user-facing tool.
+Phase 2 (read-only) is closed. Phase 3 (writes) is in progress. As of 2026-06-05: 27 MCP tools registered, 591 tests passing on macOS, run with `cd openkp && .venv/bin/pytest -q`. Per-tool status (live-verified, preview-only, deferred) is documented in `openkp/README.md`. Windows is supported with the caveats in [`docs/install/windows.md`](docs/install/windows.md) — all but 4 platform-specific tests pass, and none of the failures affect any user-facing tool.
 
 ## License
 

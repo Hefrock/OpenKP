@@ -1,7 +1,7 @@
 # OpenKP — Design Document
 
 **Version:** 0.1 (living document)
-**Last updated:** April 24, 2026
+**Last updated:** June 5, 2026
 **Author:** Hugo Campos
 
 ---
@@ -339,6 +339,14 @@ Phase 3. The patient exercises agency through the same tool they used to underst
 
 The full tool surface we're targeting, grouped by phase. The use cases in Section 6 generate this inventory. If a use case isn't answerable by some combination of tools below, the inventory is incomplete.
 
+**Current implementation snapshot, 2026-06-05:** OpenKP has 27 MCP tools
+registered: 3 housekeeping tools, 22 read tools, and 2 write tools. The live
+read surface now includes profile, care team, implants, access logs, upcoming
+orders and instructions, labs, messages, medications, problems, allergies,
+appointments, past visits, visit notes, and AVS/lab/message downloads. The
+canonical current tool inventory lives in `openkp/README.md`; this section
+remains the broader design catalog.
+
 ### Phase 2 reads
 
 | Tool | Description | Key fields to return |
@@ -349,6 +357,7 @@ The full tool surface we're targeting, grouped by phase. The use cases in Sectio
 | `list_lab_results` | Lab panels with values (supports filters: `test_name`, `date_from`, `date_to`) | `test_name`, `value`, `units`, `ref_range`, `abnormal_flag`, `date` |
 | `list_upcoming_orders` | Pending labs / imaging / procedures the doctor placed but the patient hasn't completed yet (the placed-but-not-yet-resulted half of the lab lifecycle) | `order_id`, `order_type`, `placed_date`, `placing_provider`, `prep_summary`, `expiration_date` |
 | `read_upcoming_order_instructions` | Full patient prep instructions for one pending order | `instructions_text`, `instructions_html`, `prep_requirements`, `location` |
+| `list_access_log` | Portal and third-party access history | `access_time`, `accessor`, `action`, `access_method`, `has_more`, `warnings` |
 | `list_allergies` | Known allergies + reactions | `substance`, `reaction`, `severity`, `onset_date` |
 | `list_problems` | Active problem list | `name`, `icd10`, `onset_date`, `status`, `managing_provider` |
 | `list_procedures` | Surgical and procedural history | `name`, `date`, `performing_provider`, `location`, `cpt` |

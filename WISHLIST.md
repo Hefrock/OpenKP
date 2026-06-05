@@ -2,6 +2,198 @@
 
 Ideas worth building when there's appetite, not blocking v1. Each entry should explain the use case and how it fits the bare-bones-substrate framing — OpenKP exposes structure, callers and contributors build on top.
 
+Last updated: 2026-06-05.
+
+## Current priority snapshot
+
+These are the best next sprint candidates, based on the current Kaiser portal surface and the notes in `CLAUDE.md` plus `docs/research/endpoints/`.
+
+1. `list_documents()` + `download_document(document_id)` — exposes the Document Center corpus that labs, messages, and visits do not fully cover.
+2. `reply_to_message(thread_id, body, confirm=False)` — closes the obvious secure-messaging workflow gap.
+3. `send_message` polish — small quality improvements before expanding the write surface.
+4. `list_immunizations()` + `list_health_reminders()` — useful preventive-care substrate.
+5. Billing / coverage reads — visible in the portal, but lower priority until the clinical-record and sharing surfaces are better covered.
+
+---
+
+## `list_upcoming_orders()` + `read_upcoming_order_instructions(order_id)` — pending tests and procedures
+
+**Status:** Shipped 2026-06-05. Implemented from an in-app browser capture
+plus a redacted OpenKP-side live probe of `GetUpcomingOrders`. The detail
+response body is now mapped: `orderGroupList`, `orderList`, `providerList`,
+and `upcomingOrdersSettings`, with full instructions embedded as
+`orderList[*].instructions`. Live Claude MCP testing confirmed both the list
+tool and the read-instructions tool.
+
+**Use case:** Kaiser shows pending labs, imaging, and procedures before they become results. The home page currently surfaces "new instructions to review" cards for requested tests. OpenKP can read completed lab results, but it cannot yet answer "what has my doctor ordered that I still need to do?" or "what prep instructions did Kaiser give me?"
+
+This fills the placed-but-not-resulted half of the care lifecycle and is especially useful for patients with multiple pending tests.
+
+**Shape:** Two read tools:
+
+- `list_upcoming_orders()` returns pending orders with `id`, `name`,
+  ordering provider, ordered/due/expiration dates, scheduling fields,
+  comments, and a short `instructions_preview` when present.
+- `read_upcoming_order_instructions(order_id)` returns full patient-facing
+  instructions with `instructions_text`, `instructions_html`, related
+  location/timing fields, and source metadata.
+
+Known route: `/mychartcn/app/upcoming-orders`.
+
+Known detail call: `POST /mychartcn/api/upcoming-orders/GetUpcomingOrders` with `selectedOrderID` and `PageNonce`.
+
+**What shipped:**
+- CSRF-gated `POST /mychartcn/MixedItemFeed` order-id discovery from homepage
+  JSON action URIs.
+- `GetUpcomingOrders` detail/list parser with clear failure when required
+  top-level maps are absent.
+- MCP registrations for both tools.
+- Focused tests in `openkp/tests/test_upcoming_orders.py`.
+- Endpoint map update in `docs/research/endpoints/upcoming_orders.md`.
+
+**Non-goal:** Don't decide whether an order is clinically important or overdue. Return Kaiser's structured data and let the caller reason with the user.
+
+---
+
+## `list_documents()` + `download_document(document_id)` — Document Center
+
+**Use case:** Kaiser's Document Center is a separate corpus from messages, labs, AVS PDFs, and visit notes. It may contain letters, forms, releases, scanned reports, and other documents that patients otherwise do not know to look for. A patient should be able to ask "show me every document Kaiser has posted about me" without manually clicking through the portal.
+
+**Shape:** A unified document list plus download:
+
+- `list_documents()` returns document headers from both observed surfaces when possible: title, document type, source surface, date, author/source, related encounter/order identifiers, and a download handle.
+- `download_document(document_id)` saves the source document to `~/.openkp/downloads/` using the same pattern as lab PDFs, AVS PDFs, and message attachments.
+
+Known surfaces:
+
+- Legacy MyChart: `POST /mychartcn/api/documents/viewer/LoadOtherDocuments`
+- DDM BFF: `GET /kp/prod/mycare/ddm/getdocumentsbff/v1/documents?esb-envlbl=PROD`
+- Existing download infrastructure: `GetDocumentDetails` plus `DownloadOrStream`
+
+**What's missing:**
+- Fresh HAR with response bodies preserved. Existing captures show real data but stripped bodies.
+- Confirm whether the legacy and DDM BFF lists overlap or complement each other.
+- Endpoint map update in `docs/research/endpoints/documents.md`.
+- Parser, dedupe strategy, MCP registration, and tests.
+
+**Non-goal:** Don't summarize or classify document content inside OpenKP. Return the document inventory and bytes; Claude can summarize in conversation.
+
+---
+
+## `list_access_log(...)` — portal and third-party access history
+
+**Status:** Shipped and live-verified 2026-06-05 as
+`list_access_log(kind="third_party", max_pages=5)`. Implemented from preserved
+HAR bodies with focused tests. Live smoke tests returned 100 Fasten Connect
+third-party entries across two pages, then stopped with `cursor_repeated`
+because Kaiser returned the same next cursor twice.
+
+**Use case:** A patient-directed data tool should help the patient see who and what has accessed their record. Kaiser's portal exposes sharing, linked apps, and access-log style surfaces. OpenKP should make it easy to ask: "Which third-party apps accessed my data, what did they read, and when?"
+
+This is especially aligned with the CAIHL framing: patient-owned data is not just about reading the record, but about understanding the flows around the record.
+
+**Shape:** One bounded read tool with a mode flag:
+
+- `list_access_log(kind="third_party", max_pages=5)` for connected apps and outside access.
+- `list_access_log(kind="portal", max_pages=5)` for the user's own portal access log.
+
+Returns timestamp, actor/app name, third-party action / data class when exposed, and raw Kaiser enum values for fields whose labels are not yet mapped.
+
+Known endpoints noted in `CLAUDE.md`:
+
+- `GetPortalAccessLogEntries`
+- `GetThirdPartyAccessLogEntries`
+- Legacy `/mychartcn/api/access-logs/` family.
+
+**What shipped:**
+- `docs/research/endpoints/access_logs.md` with the request / response map.
+- Bounded walker using the `startingLine` cursor.
+- Explicit `stop_reason` / warning when Kaiser repeats a cursor.
+- Tests for parser behavior, pagination, max-page stopping, and cursor-repeat stopping.
+
+**What's still missing:**
+- Enum labels for `entryType`, `ccdAction`, and `accessMethod` once more values are observed.
+- A deeper-pagination contract for older third-party history beyond the repeated cursor.
+
+**Non-goal:** Don't infer whether access was appropriate. Surface the facts and make the data flow legible.
+
+---
+
+## `reply_to_message(thread_id, body, confirm=False)` — reply to an existing care-team thread
+
+**Use case:** `send_message` starts a new non-urgent message, but most real patient communication happens as replies inside existing threads. A patient should be able to ask, "reply to Dr. Sheridan with this update" without composing a new thread or reselecting the recipient/topic.
+
+**Shape:** Phase 3 write tool using the same preview/confirm/audit pattern as `send_message`.
+
+- Preview returns the thread participants, subject, recent-message summary, body line count, and a confirmation requirement.
+- Commit sends a reply to the existing thread.
+- Audit log should not store the reply body.
+
+**What's missing:**
+- Fresh HAR capture from clicking Reply in an existing message thread.
+- Endpoint map update in `docs/research/endpoints/messages.md`.
+- Scraper implementation and tests alongside `send_message`.
+- Live verification on a low-risk real thread.
+
+**Non-goal:** Don't support attachments in v1. Keep the first version to plain-text replies.
+
+---
+
+## `send_message` polish — recipient and preview quality
+
+**Use case:** Before expanding more write tools, the existing secure-message flow should expose enough context for safer previews. The tool already has the confirm pattern; the improvements are about making the preview more informative.
+
+**Shape:** Small improvements in `messages.py`:
+
+- Derive `"Primary Care"` from `recipientType == 1` when the PCP row has empty specialty/role fields.
+- Surface `oocDateISO` and `oocContextString` so the preview can warn when a provider is out of office.
+- Rename `body_preview` or always cap it consistently so the field name matches behavior.
+
+**What's missing:**
+- Implementation and tests.
+- README/tool-doc note if returned fields change.
+
+**Non-goal:** Don't change the confirm-before-act contract.
+
+---
+
+## `list_immunizations()` + `list_health_reminders()` — preventive-care substrate
+
+**Use case:** The Kaiser menu exposes Immunizations and Health Reminders, but OpenKP cannot yet answer "what vaccines are in my record?" or "what preventive care does Kaiser think I am due for?" These tools would support gap-finding and appointment prep.
+
+**Shape:** Two read tools:
+
+- `list_immunizations()` returns vaccine name, administration date, dose/series fields when present, source, and status.
+- `list_health_reminders()` returns reminder name, status, due date, last completed date, and related care gap text.
+
+**What's missing:**
+- HAR captures for both menu surfaces with response bodies preserved.
+- New endpoint maps, scrapers, MCP registrations, and tests.
+
+**Non-goal:** Don't independently calculate preventive-care guidelines. Report Kaiser's reminder state exactly.
+
+---
+
+## Billing and coverage reads
+
+**Use case:** Billing & Coverage, Claims, and Benefits are visible in the menu, and some BFF endpoints are already mapped. These are useful for "what do I owe?" and "what coverage do I have?" questions, but they are less central than clinical-record, document, and sharing/access surfaces.
+
+**Shape:** Lower-priority Phase 4+ reads:
+
+- `get_billing_balance()`
+- `list_claims()`
+- `list_coverages()`
+- `list_member_transitions()`
+
+Known mapped BFFs live in `docs/research/endpoints/billing.md`.
+
+**What's missing:**
+- Fresh captures with bodies preserved.
+- More investigation of claims/detail pages, not just the landing page.
+- Careful handling of BFF-specific headers; billing does not use the pharmacy header contract.
+
+**Non-goal:** No payment write tool until read-side billing is stable and the confirmation/audit surface is designed.
+
 ---
 
 ## Multi-user support (multi-profile on one Mac)

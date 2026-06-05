@@ -6,12 +6,12 @@
     <title>OpenKP | Patient-directed AI for Kaiser Permanente NorCal records</title>
     <meta
       name="description"
-      content="OpenKP is a local MCP server that lets an MCP-capable AI assistant work with your Kaiser Permanente Northern California patient portal using your own credentials, on your own Mac."
+      content="OpenKP is a local MCP server that lets an MCP-capable AI assistant read and carefully act on your Kaiser Permanente Northern California patient portal using your own credentials, on your own Mac."
     >
     <meta property="og:title" content="OpenKP">
     <meta
       property="og:description"
-      content="A patient-directed MCP bridge between your AI assistant and Kaiser Permanente Northern California's patient portal."
+      content="A patient-directed MCP bridge for Kaiser Permanente Northern California records, including visits, labs, messages, access logs, and upcoming orders."
     >
     <meta property="og:image" content="https://openkp.org/assets/og-image.png">
     <meta property="og:image:secure_url" content="https://openkp.org/assets/og-image.png">
@@ -25,7 +25,7 @@
     <meta name="theme-color" content="#f6f3ea">
     <link rel="canonical" href="https://openkp.org/">
     <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg">
-    <link rel="stylesheet" href="./styles.css">
+    <link rel="stylesheet" href="./styles.css?v=20260605">
   </head>
   <body>
     <header class="site-header" data-elevate>
@@ -48,8 +48,9 @@
           <p class="eyebrow">Kaiser Permanente Northern California only</p>
           <h1>Your patient portal, directed by you.</h1>
           <p class="lede">
-            OpenKP is a local MCP server that lets your AI assistant read and act
-            on your Kaiser Permanente record using your own credentials, on your own Mac.
+            OpenKP is a local MCP server that lets your AI assistant read, compare,
+            and carefully act on your Kaiser Permanente record using your own
+            credentials, on your own Mac.
           </p>
           <div class="hero-actions" aria-label="Primary calls to action">
             <a class="button primary" href="https://github.com/hugooc/OpenKP">View on GitHub</a>
@@ -87,42 +88,42 @@
               <div class="chat-window" data-slide aria-roledescription="slide" aria-label="Example 2 of 3" aria-hidden="true">
                 <div class="slide-head">
                   <span class="slide-num">02</span>
-                  <span class="slide-name">Implants</span>
+                  <span class="slide-name">Access logs</span>
                 </div>
                 <div class="chat-body">
                   <div class="bubble user">
-                    What devices are implanted in me? I want make, model, serial,
-                    and the date each one went in.
+                    Which third-party apps accessed my Kaiser record, what did
+                    they read, and when?
                   </div>
                   <div class="tool-call">
                     <span class="status-dot"></span>
-                    openkp.list_implants
+                    openkp.list_access_log
                   </div>
                   <div class="bubble assistant">
-                    Two devices on record. One active cardiac pacemaker with manufacturer,
-                    model, and UDI captured. One earlier lead explanted in a prior procedure.
-                    Implant and explant providers attached...
+                    I found a burst of third-party access by one connected app,
+                    including clinical notes, medication ingredients, provider
+                    details, and test-result list access.
                   </div>
                 </div>
               </div>
               <div class="chat-window" data-slide aria-roledescription="slide" aria-label="Example 3 of 3" aria-hidden="true">
                 <div class="slide-head">
                   <span class="slide-num">03</span>
-                  <span class="slide-name">Messages</span>
+                  <span class="slide-name">Upcoming orders</span>
                 </div>
                 <div class="chat-body">
                   <div class="bubble user">
-                    Walk back through every message thread and surface anything I asked
-                    about that never got a clear follow-up.
+                    What tests or procedures has my doctor ordered that I still
+                    need to complete, and what are the prep instructions?
                   </div>
                   <div class="tool-call">
                     <span class="status-dot"></span>
-                    openkp.list_messages &rarr; openkp.read_message
+                    openkp.list_upcoming_orders &rarr; openkp.read_upcoming_order_instructions
                   </div>
                   <div class="bubble assistant">
-                    Four threads where your question didn't get a direct reply.
-                    Three are medication-related, one is about a specialist referral.
-                    Pulling the most recent to the top...
+                    One upcoming lab order is due soon. The full instruction text
+                    says to follow your doctor's timing guidance and complete it
+                    through any Kaiser lab when due.
                   </div>
                 </div>
               </div>
@@ -202,16 +203,17 @@
           <blockquote>Which lab values have drifted in the last 18 months?</blockquote>
           <blockquote>How many appointments did I have last year, split by virtual vs in-person?</blockquote>
           <blockquote>Compare what my cardiologist and primary-care doctor each wrote over time.</blockquote>
-          <blockquote>Are there diagnoses on my problem list I don't recognize?</blockquote>
+          <blockquote>Which connected apps accessed my record, and what data classes did they touch?</blockquote>
+          <blockquote>What tests or procedures has Kaiser ordered that I haven't completed yet?</blockquote>
         </div>
       </section>
 
       <section class="tools-section" id="tools">
         <div class="section-kicker">Tool surface</div>
         <div class="tools-header">
-          <h2>24 MCP tools, focused on real patient workflows.</h2>
+          <h2>27 MCP tools, focused on real patient workflows.</h2>
           <p>
-            Three housekeeping tools, nineteen read tools, and two write tools.
+            Three housekeeping tools, twenty-two read tools, and two write tools.
             Read paths are broadly live-verified. Write commit paths are still treated carefully.
           </p>
         </div>
@@ -220,7 +222,8 @@
             <h3>Read</h3>
             <ul>
               <li>Profile, insurance, PCP, emergency contacts</li>
-              <li>Care team, specialists, implanted devices</li>
+              <li>Care team, specialists, implanted devices, access logs</li>
+              <li>Upcoming tests, procedures, and prep instructions</li>
               <li>Messages, message attachments, archival search</li>
               <li>Lab results, imaging, PDFs, narratives</li>
               <li>Medications, refill status, order tracking</li>

@@ -182,6 +182,7 @@ h3 {
 }
 
 .hero-panel {
+  min-width: 0;
   overflow: hidden;
   border: 1px solid var(--ink);
   background: var(--white);
@@ -213,20 +214,24 @@ h3 {
 
 .chat-window {
   display: grid;
+  min-width: 0;
 }
 
 .chat-body {
   display: grid;
   gap: 16px;
+  min-width: 0;
   padding: 22px;
 }
 
 .hero-carousel {
   position: relative;
+  min-width: 0;
 }
 
 .hero-carousel-track {
   display: grid;
+  min-width: 0;
 }
 
 .hero-carousel-track > .chat-window {
@@ -246,6 +251,7 @@ h3 {
   display: flex;
   align-items: baseline;
   gap: 14px;
+  min-width: 0;
   padding: 14px 22px;
   color: var(--white);
   font-weight: 850;
@@ -327,6 +333,7 @@ h3 {
 }
 
 .bubble {
+  min-width: 0;
   padding: 16px;
   border: 1px solid var(--line);
   font-size: 15px;
@@ -343,14 +350,16 @@ h3 {
 }
 
 .tool-call {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  align-items: start;
   gap: 10px;
   padding: 12px;
   border: 1px dashed var(--green);
   color: var(--green-deep);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .status-dot {
@@ -515,10 +524,15 @@ blockquote {
 }
 
 .install-card {
+  min-width: 0;
   align-self: start;
   border: 1px solid var(--line);
   background: var(--white);
   padding: 24px;
+}
+
+.install-copy {
+  min-width: 0;
 }
 
 code {
@@ -641,6 +655,12 @@ code {
 
   .question-grid blockquote {
     min-height: auto;
+  }
+
+  .command-block code {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .site-footer {

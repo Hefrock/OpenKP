@@ -31,6 +31,7 @@ from mcp.server.fastmcp import FastMCP
 
 from openkp import __version__
 from openkp.config import load_config
+from openkp.scrapers.access_logs import fetch_access_log
 from openkp.scrapers.allergies import fetch_allergies
 from openkp.scrapers.appointments import fetch_appointments, fetch_past_visits
 from openkp.scrapers.care_team import fetch_care_team
@@ -61,6 +62,10 @@ from openkp.scrapers.refill import (
 )
 from openkp.scrapers.request import KaiserRequest
 from openkp.scrapers.session import SessionStore
+from openkp.scrapers.upcoming_orders import (
+    fetch_upcoming_order_instructions,
+    fetch_upcoming_orders,
+)
 
 logger = logging.getLogger("openkp")
 
@@ -490,6 +495,90 @@ async def list_implants() -> dict:
     client = KaiserRequest(store)
     response = await fetch_implants(client)
     return response.model_dump()
+
+
+@mcp.tool()
+async def list_access_log(kind: str = "third_party", max_pages: int = 5) -> dict:
+    """List Kaiser access-log entries.
+
+    Args:
+      kind: `"third_party"` for connected apps / outside data access, or
+        `"portal"` for the patient's own portal access history. Defaults to
+        `"third_party"` because it is the more useful patient-owned-data view.
+      max_pages: How many 50-entry pages to walk. Default 5. Hard-capped at 20.
+
+    Returns a dict shaped like the `AccessLogResponse` pydantic model in
+    `openkp.scrapers.access_logs`:
+
+      - `entries`: newest-first access-log entries.
+      - `total_count`: len(entries).
+      - `pages_walked`: pages actually fetched.
+      - `has_more`: True if Kaiser likely has more entries beyond this call.
+      - `next_cursor`: Kaiser's next `startingLine` cursor when available.
+      - `stop_reason`: why the walker stopped.
+      - `warnings`: non-empty when Kaiser pagination looked incomplete.
+
+    Third-party entries carry `accessor`, `access_time`, `action`, and
+    `access_method`. Portal entries carry `accessor`, `access_time`,
+    `entry_type`, and `ccd_action`. OpenKP does not infer whether access was
+    appropriate; it only surfaces what Kaiser reports.
+
+    See `docs/research/endpoints/access_logs.md`.
+    """
+    store = _get_session_store()
+    client = KaiserRequest(store)
+    response = await fetch_access_log(client, kind=kind, max_pages=max_pages)
+    return response.model_dump()
+
+
+@mcp.tool()
+async def list_upcoming_orders() -> dict:
+    """List pending tests/procedures that Kaiser says still need action.
+
+    Source: Kaiser's Upcoming Tests and Procedures page plus
+    `/mychartcn/api/upcoming-orders/GetUpcomingOrders`. This surfaces orders
+    before they become results: labs, imaging, treatments, or other procedures
+    a doctor placed on the patient's behalf.
+
+    Returns a dict shaped like `UpcomingOrdersResponse` in
+    `openkp.scrapers.upcoming_orders`:
+
+      - `orders`: pending order summaries. Each order carries `id`, `name`,
+        ordering provider, ordered/due/expiration dates, scheduling fields,
+        comments, and an `instructions_preview`.
+      - `total_count`, `group_count`, `provider_count`.
+      - `warnings`: non-empty when Kaiser's home feed and detail response do
+        not agree.
+
+    Pass an order's `id` to `read_upcoming_order_instructions` for the full
+    instruction HTML/text.
+
+    See `docs/research/endpoints/upcoming_orders.md`.
+    """
+    store = _get_session_store()
+    client = KaiserRequest(store)
+    response = await fetch_upcoming_orders(client)
+    return response.model_dump()
+
+
+@mcp.tool()
+async def read_upcoming_order_instructions(order_id: str) -> dict | None:
+    """Read the full instructions for one pending upcoming order.
+
+    Args:
+      order_id: The `id` field from `list_upcoming_orders().orders[i]`.
+
+    Returns a dict shaped like `UpcomingOrderInstructions` with the order name,
+    provider/group metadata, instruction HTML, instruction plain text, comments,
+    and date fields. Returns None if the order id is empty or Kaiser returns a
+    valid detail response that does not include that order.
+
+    See `docs/research/endpoints/upcoming_orders.md`.
+    """
+    store = _get_session_store()
+    client = KaiserRequest(store)
+    response = await fetch_upcoming_order_instructions(client, order_id)
+    return response.model_dump() if response else None
 
 
 @mcp.tool()
