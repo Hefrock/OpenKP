@@ -371,6 +371,7 @@ h3 {
 
 section {
   padding: 88px 6vw;
+  scroll-margin-top: 76px;
 }
 
 .intro-band {
@@ -549,11 +550,16 @@ code {
 }
 
 .command-block code {
-  display: block;
+  display: flex;
+  gap: 8px;
   min-width: max-content;
   padding: 16px;
   background: transparent;
   color: var(--paper);
+}
+
+.command-block code span {
+  min-width: 0;
 }
 
 .install-card p {
@@ -658,9 +664,14 @@ code {
   }
 
   .command-block code {
+    display: grid;
     min-width: 0;
-    white-space: normal;
-    overflow-wrap: anywhere;
+    gap: 4px;
+    overflow-wrap: break-word;
+  }
+
+  .command-block code span:last-child {
+    overflow-wrap: normal;
   }
 
   .site-footer {

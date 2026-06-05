@@ -14,14 +14,14 @@
     <path d="M70 36v60M94 66H68L50 90" fill="none" stroke="#9f3f2f" stroke-width="10" stroke-linecap="square" stroke-linejoin="miter"/>
   </g>
 
-  <text x="254" y="229" fill="#9f3f2f" font-family="Arial, sans-serif" font-size="25" font-weight="800" letter-spacing="0">KAISER PERMANENTE NORTHERN CALIFORNIA ONLY</text>
+  <text x="254" y="229" fill="#9f3f2f" font-family="Arial, sans-serif" font-size="25" font-weight="800" letter-spacing="0">CRITICAL AI HEALTH LITERACY IN PRACTICE</text>
   <text x="254" y="309" fill="#181512" font-family="Arial, sans-serif" font-size="74" font-weight="850" letter-spacing="0">OpenKP</text>
-  <text x="254" y="381" fill="#181512" font-family="Arial, sans-serif" font-size="48" font-weight="760" letter-spacing="0">Your patient portal, directed by you.</text>
-  <text x="254" y="452" fill="#655f55" font-family="Arial, sans-serif" font-size="31" font-weight="520">A local MCP bridge between your AI assistant and kp.org,</text>
-  <text x="254" y="495" fill="#655f55" font-family="Arial, sans-serif" font-size="31" font-weight="520">using your own credentials, on your own Mac.</text>
+  <text x="254" y="381" fill="#181512" font-family="Arial, sans-serif" font-size="48" font-weight="760" letter-spacing="0">Patient-directed AI for Kaiser records.</text>
+  <text x="254" y="452" fill="#655f55" font-family="Arial, sans-serif" font-size="31" font-weight="520">A local MCP bridge that helps patients read, question,</text>
+  <text x="254" y="495" fill="#655f55" font-family="Arial, sans-serif" font-size="31" font-weight="520">and act on their own record with their own credentials.</text>
 
   <rect x="86" y="522" width="270" height="1" fill="#181512"/>
   <text x="380" y="532" fill="#255d3f" font-family="Arial, sans-serif" font-size="24" font-weight="800">LOCAL-FIRST</text>
   <text x="550" y="532" fill="#9f3f2f" font-family="Arial, sans-serif" font-size="24" font-weight="800">PATIENT-DIRECTED</text>
-  <text x="795" y="532" fill="#c6923e" font-family="Arial, sans-serif" font-size="24" font-weight="800">SOURCE-AVAILABLE</text>
+  <text x="795" y="532" fill="#c6923e" font-family="Arial, sans-serif" font-size="24" font-weight="800">AGENCY-EXPANDING</text>
 </svg>
